@@ -4,10 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "tsc -b && vite build && node scripts/postbuild.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "serve": "node scripts/serve-dist.mjs 4173"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",
