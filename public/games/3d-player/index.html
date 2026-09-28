@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>3D PLAYER · 霓虹赛道</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#05060f;
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; color:#e8f0ff; }
+  #wrap { position:relative; width:100%; height:100%; }
+  canvas { display:block; width:100%; height:100%; }
+
+  /* ---------- HUD ---------- */
+  #hud { position:absolute; inset:0; pointer-events:none; opacity:0; transition:opacity .3s; }
+  #hud.on { opacity:1; }
+  .panel { position:absolute; top:18px; left:18px; display:flex; gap:10px; flex-wrap:wrap; }
+  .chip { background:rgba(8,14,32,.62); border:1px solid rgba(90,190,255,.35);
+    border-radius:10px; padding:7px 13px; font-size:15px; letter-spacing:.5px;
+    backdrop-filter:blur(4px); box-shadow:0 0 18px rgba(0,140,255,.15) inset; }
+  .chip b { color:#ffd25a; font-size:18px; }
+  .chip.c2 b { color:#5affc8; }
+  .chip.c3 b { color:#ff7a9c; }
+  #hp { position:absolute; top:18px; right:18px; font-size:26px; letter-spacing:3px; }
+  #combo { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-size:64px; font-weight:900; color:#ffd25a; text-shadow:0 0 26px rgba(255,190,40,.8);
+    opacity:0; }
+  #tips { position:absolute; bottom:16px; width:100%; text-align:center; font-size:13px;
+    color:rgba(190,215,255,.55); letter-spacing:1px; }
+
+  /* ---------- 封面 / 结束页 ---------- */
+  .screen { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%, rgba(20,34,77,.80) 0%, rgba(8,11,28,.90) 55%, rgba(4,5,13,.95) 100%);
+    padding:24px; overflow:auto; }
+  .screen.hide { display:none; }
+  .card { width:min(720px,100%); background:rgba(10,16,38,.86);
+    border:1px solid rgba(90,190,255,.28); border-radius:20px; padding:30px 34px;
+    box-shadow:0 30px 90px rgba(0,0,0,.6), 0 0 60px rgba(0,120,255,.12) inset; }
+  h1 { font-size:clamp(30px,6vw,50px); letter-spacing:4px; line-height:1.1;
+    background:linear-gradient(92deg,#5affc8,#5ac8ff 40%,#c07dff 75%,#ffd25a);
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub { margin-top:6px; font-size:14px; color:#8fb3e8; letter-spacing:2px; }
+  .rules { margin:20px 0 6px; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:560px){ .rules{ grid-template-columns:1fr; } }
+  .r { background:rgba(255,255,255,.045); border-left:3px solid #5ac8ff;
+    border-radius:8px; padding:10px 13px; font-size:14px; line-height:1.6; }
+  .r i { font-style:normal; color:#5affc8; font-weight:700; margin-right:6px; }
+  .r.hot { border-left-color:#ff7a9c; } .r.hot i { color:#ff7a9c; }
+  .r.gold { border-left-color:#ffd25a; } .r.gold i { color:#ffd25a; }
+  .r.purple { border-left-color:#c07dff; } .r.purple i { color:#c07dff; }
+  .keys { margin-top:16px; font-size:14px; color:#a9c6f2; line-height:1.9; }
+  kbd { display:inline-block; min-width:26px; text-align:center; padding:2px 8px; margin:0 2px;
+    background:#1b2b52; border:1px solid #3d5c96; border-bottom-width:3px;
+    border-radius:6px; font-family:monospace; font-size:13px; color:#dce9ff; }
+  .btn { margin-top:22px; width:100%; padding:15px; font-size:19px; font-weight:800; letter-spacing:3px;
+    color:#04122a; border:0; border-radius:12px; cursor:pointer;
+    background:linear-gradient(92deg,#5affc8,#5ac8ff);
+    box-shadow:0 8px 28px rgba(90,200,255,.35); transition:transform .12s, box-shadow .12s; }
+  .btn:hover { transform:translateY(-2px); box-shadow:0 12px 34px rgba(90,200,255,.5); }
+  .btn:active { transform:translateY(1px); }
+  #over .card { border-color:rgba(255,122,156,.4); }
+  .stats { margin-top:18px; display:flex; gap:12px; flex-wrap:wrap; }
+  .stat { flex:1; min-width:120px; background:rgba(255,255,255,.05); border-radius:12px;
+    padding:14px; text-align:center; }
+  .stat span { display:block; font-size:12px; color:#8fb3e8; letter-spacing:2px; }
+  .stat b { display:block; margin-top:4px; font-size:30px; color:#ffd25a; }
+  #best { margin-top:12px; text-align:center; font-size:13px; color:#8fb3e8; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+
+  <div id="hud">
+    <div class="panel">
+      <div class="chip">距离 <b id="hDist">0</b> m</div>
+      <div class="chip c2">得分 <b id="hScore">0</b></div>
+      <div class="chip c3">金币 <b id="hCoin">0</b></div>
+      <div class="chip">时速 <b id="hSpd">0</b></div>
+    </div>
+    <div id="hp">♥♥♥</div>
+    <div id="combo"></div>
+    <div id="tips">A / D 或 ← → 左右移动　·　空格 跳跃　·　P 暂停</div>
+  </div>
+
+  <!-- 封面：规则说明 -->
+  <div class="screen" id="cover">
+    <div class="card">
+      <h1>3D PLAYER</h1>
+      <div class="sub">霓虹赛道 · NEON RUNNER</div>
+
+      <div class="rules">
+        <div class="r"><i>目标</i>驾驶光立方一路向前冲，跑得越远分越高，撞光墙三次就结束。</div>
+        <div class="r purple"><i>障碍</i><b>红墙</b>只能左右绕过，<b>橙块</b>可以跳过去。撞上一次掉一颗心。</div>
+        <div class="r gold"><i>金币</i>吃到金币 +10 分，连吃不中断可叠加连击，分数越滚越高。</div>
+        <div class="r hot"><i>提速</i>速度会随距离自动加快，最高到极限速，越到后面越考验反应。</div>
+      </div>
+
+      <div class="keys">
+        <kbd>A</kbd><kbd>D</kbd> 或 <kbd>←</kbd><kbd>→</kbd>　左右移动<br>
+        <kbd>空格</kbd> / <kbd>W</kbd> / <kbd>↑</kbd>　跳跃（长按可跳更久）<br>
+        <kbd>P</kbd>　暂停 / 继续　·　手机：左右半屏点击移动，上滑跳跃
+      </div>
+
+      <button class="btn" id="btnStart">开 始 游 戏</button>
+      <div id="bestCover"></div>
+    </div>
+  </div>
+
+  <!-- 结束页 -->
+  <div class="screen hide" id="over">
+    <div class="card">
+      <h1>赛 道 终 止</h1>
+      <div class="sub">GAME OVER</div>
+      <div class="stats">
+        <div class="stat"><span>距离</span><b id="oDist">0</b></div>
+        <div class="stat"><span>得分</span><b id="oScore">0</b></div>
+        <div class="stat"><span>金币</span><b id="oCoin">0</b></div>
+      </div>
+      <div id="best"></div>
+      <button class="btn" id="btnAgain">再 来 一 局</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* =========================================================
+   3D PLAYER — 零依赖 3D 跑酷
+   自写渲染管线：世界坐标 -> 相机空间 -> 近平面裁剪 -> 透视投影 -> 画家算法绘制
+   ========================================================= */
+
+const cv  = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1, FOC = 0;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = Math.floor(W * DPR); cv.height = Math.floor(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  FOC = (H * 0.5) / Math.tan((68 * Math.PI / 180) / 2);
+}
+window.addEventListener('resize', resize);
+
+/* ---------------- 常量 ---------------- */
+const ROAD_HALF   = 6.2;    // 赛道半宽
+const SEG         = 4;      // 地面分段长度
+const DRAW_DIST   = 150;    // 可视距离
+const NEAR        = 0.45;   // 近裁剪面
+const GRAV        = -58, JUMP_V = 17.5;
+
+/* ---------------- 状态 ---------------- */
+const cam = { x:0, y:5.0, z:-11, yaw:0, pitch:-0.17 };
+const player = { x:0, y:0, z:0, w:0.85, h:1.5, vx:0, vy:0, onGround:true, tilt:0 };
+
+let obstacles = [], coins = [], pillars = [], particles = [];
+let state = 'cover';              // cover | play | pause | over
+let dist = 0, score = 0, coinCount = 0, combo = 0, comboTimer = 0;
+let hp = 3, invuln = 0, speed = 15, shake = 0, spawnZ = 40, coinZ = 30, pillarZ = 0;
+let lastTS = 0, best = 0;
+
+try { best = parseInt(localStorage.getItem('3dplayer_best') || '0', 10) || 0; } catch(e){}
+function showBest(el){
+  el.textContent = best > 0 ? '历史最高分：' + best : '';
+}
+showBest(document.getElementById('bestCover'));
+
+/* ---------------- 音效（WebAudio，无外链） ---------------- */
+let ac = null;
+function beep(freq, dur, type, vol, slide){
+  try{
+    if(!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type || 'square'; o.frequency.value = freq;
+    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), ac.currentTime + dur);
+    g.gain.setValueAtTime(vol || 0.06, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(); o.stop(ac.currentTime + dur);
+  }catch(e){}
+}
+const sfxCoin  = () => beep(1180, 0.09, 'square', 0.05, 1760);
+const sfxJump  = () => beep(420,  0.11, 'sine',   0.05, 760);
+const sfxHit   = () => beep(150,  0.28, 'sawtooth',0.09, 60);
+const sfxOver  = () => { beep(300,0.5,'sawtooth',0.1,70); setTimeout(()=>beep(200,0.7,'sine',0.09,50),160); };
+
+/* ---------------- 几何工具 ---------------- */
+// 生成一个轴对齐立方体的 6 个面（顶点索引 + 法线）
+const CUBE_FACES = [
+  { idx:[0,1,2,3], n:[0,0,-1], k:0.72 }, // 后
+  { idx:[5,4,7,6], n:[0,0, 1], k:0.95 }, // 前
+  { idx:[4,0,3,7], n:[-1,0,0], k:0.62 }, // 左
+  { idx:[1,5,6,2], n:[ 1,0,0], k:0.82 }, // 右
+  { idx:[3,2,6,7], n:[0, 1,0], k:1.00 }, // 顶
+  { idx:[4,5,1,0], n:[0,-1,0], k:0.45 }  // 底
+];
+function boxVerts(cx, cy, cz, sx, sy, sz, rotY){
+  const hx=sx/2, hy=sy/2, hz=sz/2;
+  let v = [
+    [-hx,-hy,-hz],[ hx,-hy,-hz],[ hx, hy,-hz],[-hx, hy,-hz],
+    [-hx,-hy, hz],[ hx,-hy, hz],[ hx, hy, hz],[-hx, hy, hz]
+  ];
+  if(rotY){
+    const c=Math.cos(rotY), s=Math.sin(rotY);
+    v = v.map(p => [p[0]*c - p[2]*s, p[1], p[0]*s + p[2]*c]);
+  }
+  return v.map(p => [p[0]+cx, p[1]+cy, p[2]+cz]);
+}
+
+/* ---------------- 相机变换 ---------------- */
+let cyaw=1, syaw=0, cpit=1, spit=0;
+function updateCamBasis(){
+  cyaw = Math.cos(cam.yaw); syaw = Math.sin(cam.yaw);
+  cpit = Math.cos(cam.pitch); spit = Math.sin(cam.pitch);
+}
+function toCam(x, y, z){
+  const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+  const x2 = dx*cyaw - dz*syaw;
+  const z2 = dx*syaw + dz*cyaw;
+  const y2 = dy*cpit - z2*spit;
+  const z3 = dy*spit + z2*cpit;
+  return [x2, y2, z3];
+}
+function project(p){
+  const inv = FOC / p[2];
+  return [W*0.5 + p[0]*inv, H*0.5 - p[1]*inv];
+}
+// 近平面裁剪（Sutherland–Hodgman，对 z = NEAR）
+function clipNear(poly){
+  const out = [];
+  for(let i=0;i<poly.length;i++){
+    const a = poly[i], b = poly[(i+1) % poly.length];
+    const ain = a[2] >= NEAR, bin = b[2] >= NEAR;
+    if(ain) out.push(a);
+    if(ain !== bin){
+      const t = (NEAR - a[2]) / (b[2] - a[2]);
+      out.push([a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, NEAR]);
+    }
+  }
+  return out;
+}
+
+/* ---------------- 面收集与绘制 ---------------- */
+let faces = [];
+// bias：人为增大排序深度，让地面永远先于物体绘制（画家算法的层级修正）
+function pushFace(ptsCam, color, stroke, alpha, glow, bias){
+  let n = ptsCam.length, zsum = 0, zmin = Infinity, zmax = -Infinity;
+  for(let i=0;i<n;i++){ const z=ptsCam[i][2]; zsum+=z; if(z<zmin)zmin=z; if(z>zmax)zmax=z; }
+  if(zmax < NEAR) return;                    // 完全在身后
+  let poly = ptsCam;
+  if(zmin < NEAR){ poly = clipNear(poly); if(poly.length < 3) return; }
+  faces.push({ p:poly, z:zsum/n + (bias||0), c:color, s:stroke, a:alpha===undefined?1:alpha, g:glow||0 });
+}
+
+function shade(rgb, k){
+  return 'rgb(' + Math.min(255, rgb[0]*k|0) + ',' + Math.min(255, rgb[1]*k|0) + ',' + Math.min(255, rgb[2]*k|0) + ')';
+}
+
+function drawFaces(){
+  faces.sort((a,b) => b.z - a.z);   // 画家算法：远的先画
+  for(let i=0;i<faces.length;i++){
+    const f = faces[i];
+    const scr = [], n = f.p.length;
+    for(let j=0;j<n;j++) scr.push(project(f.p[j]));
+    ctx.globalAlpha = f.a;
+    if(f.g){ ctx.shadowColor = f.c; ctx.shadowBlur = f.g; } else { ctx.shadowBlur = 0; }
+    ctx.beginPath();
+    ctx.moveTo(scr[0][0], scr[0][1]);
+    for(let j=1;j<n;j++) ctx.lineTo(scr[j][0], scr[j][1]);
+    ctx.closePath();
+    ctx.fillStyle = f.c; ctx.fill();
+    if(f.s){ ctx.lineWidth = f.s.w; ctx.strokeStyle = f.s.c; ctx.stroke(); }
+  }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+}
+
+/* ---------------- 场景生成 ---------------- */
+function spawnChunk(){
+  // ---- 障碍排 ----
+  const lanes = [-ROAD_HALF + 2.1, 0, ROAD_HALF - 2.1];
+  const blockCount = dist < 300 ? 1 : (Math.random() < 0.45 ? 2 : 1);
+  const picked = [];
+  for(let i=0;i<blockCount;i++){
+    let li = Math.floor(Math.random()*3);
+    if(picked.indexOf(li) >= 0) li = (li + 1 + Math.floor(Math.random()*2)) % 3;
+    picked.push(li);
+  }
+  picked.forEach(li => {
+    const high = Math.random() < 0.42;                 // 高墙：只能绕
+    const h  = high ? 3.4 : 1.5;
+    const sy = high ? 3.4 : 1.5;
+    obstacles.push({
+      x: lanes[li], y: sy/2, z: spawnZ,
+      sx: 3.4, sy: sy, sz: 1.5,
+      col: high ? [255, 70, 100] : [255, 150, 50],
+      high: high, hit: false
+    });
+  });
+
+  // ---- 金币串 ----
+  if(Math.random() < 0.8){
+    const freeLanes = lanes.filter((_, i) => picked.indexOf(i) < 0);
+    if(freeLanes.length){
+      const lx = freeLanes[Math.floor(Math.random()*freeLanes.length)];
+      const cnt = 3 + Math.floor(Math.random()*4);
+      const air = Math.random() < 0.35;
+      for(let i=0;i<cnt;i++){
+        coins.push({ x:lx, y: air ? 2.2 + Math.sin(i*0.9)*1.1 : 1.2, z: spawnZ + i*3.2, spin:i*0.5, got:false });
+      }
+    }
+  }
+  spawnZ += Math.max(24, 40 - dist*0.012);
+}
+
+function ensureWorld(){
+  while(spawnZ < player.z + DRAW_DIST + 60) spawnChunk();
+  while(pillarZ < player.z + DRAW_DIST + 60){
+    pillars.push({ z: pillarZ });
+    pillarZ += 8;
+  }
+  // 清理身后的对象
+  const cut = player.z - 30;
+  obstacles = obstacles.filter(o => o.z > cut && !o.hit);
+  coins = coins.filter(c => c.z > cut && !c.got);
+  pillars = pillars.filter(p => p.z > cut);
+}
+
+/* ---------------- 粒子 ---------------- */
+function burst(x, y, z, color, n){
+  for(let i=0;i<n;i++){
+    particles.push({
+      x:x, y:y, z:z,
+      vx:(Math.random()-0.5)*9, vy:Math.random()*8+1, vz:(Math.random()-0.5)*9,
+      life:0.7, max:0.7, c:color, s:0.14 + Math.random()*0.16
+    });
+  }
+}
+function updateParticles(dt){
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.life -= dt;
+    if(p.life <= 0){ particles.splice(i,1); continue; }
+    p.vy += GRAV*0.45*dt;
+    p.x += p.vx*dt; p.y += p.vy*dt; p.z += p.vz*dt;
+    if(p.y < 0.05){ p.y = 0.05; p.vy *= -0.4; p.vx *= 0.7; p.vz *= 0.7; }
+  }
+}
+
+/* ---------------- 渲染一帧场景 ---------------- */
+function renderScene(){
+  faces.length = 0;
+
+  // 天空（渐变）
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0,    '#070a1c');
+  sky.addColorStop(0.42, '#152a5e');
+  sky.addColorStop(0.62, '#3b2b6e');
+  sky.addColorStop(0.78, '#8c3a6a');
+  sky.addColorStop(1,    '#1a1030');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+
+  // 远处太阳
+  const sunC = toCam(0, 26, player.z + 260);
+  if(sunC[2] > NEAR){
+    const sp = project(sunC), r = FOC / sunC[2] * 26;
+    const g = ctx.createRadialGradient(sp[0], sp[1], 0, sp[0], sp[1], r);
+    g.addColorStop(0, 'rgba(255,215,120,.55)');
+    g.addColorStop(0.55,'rgba(255,120,150,.20)');
+    g.addColorStop(1, 'rgba(255,80,140,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sp[0], sp[1], r, 0, 6.2832); ctx.fill();
+  }
+
+  updateCamBasis();
+
+  // ---- 地面条带 ----
+  const startSeg = Math.floor((player.z - 24) / SEG) * SEG;
+  for(let z = startSeg; z < player.z + DRAW_DIST; z += SEG){
+    const i = Math.round(z / SEG);
+    const dark = (i & 1) === 0;
+    const base = dark ? [22, 30, 60] : [30, 40, 78];
+    // 每 8 段加一条横向亮线
+    const line = (i % 8 === 0);
+    const col = line ? [90, 190, 255] : base;
+    pushFace([
+      toCam(-ROAD_HALF, 0, z),        toCam(ROAD_HALF, 0, z),
+      toCam(ROAD_HALF, 0, z + SEG),   toCam(-ROAD_HALF, 0, z + SEG)
+    ], shade(col, line ? 0.9 : 0.75 + 0.25 * (1 - Math.min(1,(z - player.z)/DRAW_DIST))),
+       null, 1, 0, 5000);
+  }
+
+  // ---- 赛道边界发光带 ----
+  [-1, 1].forEach(s => {
+    const x = s * ROAD_HALF;
+    for(let z = startSeg; z < player.z + DRAW_DIST; z += SEG){
+      pushFace([
+        toCam(x, 0.02, z), toCam(x + s*0.42, 0.02, z),
+        toCam(x + s*0.42, 0.02, z + SEG), toCam(x, 0.02, z + SEG)
+      ], (Math.round(z/SEG) & 1) ? 'rgba(90,255,220,.85)' : 'rgba(90,200,255,.85)', null, 1, 14, 4000);
+    }
+  });
+
+  // ---- 两侧霓虹灯柱 ----
+  pillars.forEach(p => {
+    [-1, 1].forEach(s => {
+      const x = s * (ROAD_HALF + 2.2);
+      const v = boxVerts(x, 3.2, p.z, 0.34, 6.4, 0.34);
+      const lit = (Math.floor(p.z / 8) & 1);
+      const col = lit ? [90, 255, 220] : [190, 90, 255];
+      CUBE_FACES.forEach(f => {
+        const pts = f.idx.map(i => toCam(v[i][0], v[i][1], v[i][2]));
+        pushFace(pts, shade(col, f.k * 0.9), null, 1, 16);
+      });
+    });
+  });
+
+  // ---- 金币 ----
+  coins.forEach(c => {
+    const v = boxVerts(c.x, c.y, c.z, 1.05, 1.05, 1.05, c.spin);
+    CUBE_FACES.forEach(f => {
+      const pts = f.idx.map(i => toCam(v[i][0], v[i][1], v[i][2]));
+      pushFace(pts, shade([255, 210, 70], f.k), { w:1.4, c:'rgba(255,255,190,.9)' }, 1, 18);
+    });
+  });
+
+  // ---- 障碍 ----
+  obstacles.forEach(o => {
+    const v = boxVerts(o.x, o.y, o.z, o.sx, o.sy, o.sz);
+    CUBE_FACES.forEach(f => {
+      const pts = f.idx.map(i => toCam(v[i][0], v[i][1], v[i][2]));
+      pushFace(pts, shade(o.col, f.k * 0.95), { w:1.6, c:'rgba(255,255,255,.35)' }, 1, 12);
+    });
+    // 顶部警示条
+    const v2 = boxVerts(o.x, o.sy + 0.09, o.z, o.sx*0.9, 0.16, o.sz*0.9);
+    pushFace([
+      toCam(v2[3][0], v2[3][1], v2[3][2]), toCam(v2[2][0], v2[2][1], v2[2][2]),
+      toCam(v2[6][0], v2[6][1], v2[6][2]), toCam(v2[7][0], v2[7][1], v2[7][2])
+    ], 'rgba(255,255,255,.85)', null, 1, 12);
+  });
+
+  // ---- 玩家光立方 ----
+  if(!(invuln > 0 && Math.floor(invuln * 12) % 2 === 0)){
+    const v = boxVerts(player.x, player.y + player.h/2, player.z, player.w*2, player.h, player.w*2, 0);
+    CUBE_FACES.forEach(f => {
+      const pts = f.idx.map(i => toCam(v[i][0], v[i][1], v[i][2]));
+      pushFace(pts, shade([70, 190, 255], f.k), { w:2, c:'rgba(190,245,255,.95)' }, 1, 22);
+    });
+    // 护目镜（朝向相机的一侧，方便看清角色朝向）
+    const vv = boxVerts(player.x, player.y + player.h*0.74, player.z - player.w - 0.04, player.w*1.25, 0.32, 0.1);
+    pushFace([
+      toCam(vv[0][0], vv[0][1], vv[0][2]), toCam(vv[1][0], vv[1][1], vv[1][2]),
+      toCam(vv[2][0], vv[2][1], vv[2][2]), toCam(vv[3][0], vv[3][1], vv[3][2])
+    ], 'rgba(200,250,255,.95)', null, 1, 16);
+    // 脚下影子
+    const sh = 1 - Math.min(1, player.y / 5);
+    pushFace([
+      toCam(player.x-0.85, 0.03, player.z-0.85), toCam(player.x+0.85, 0.03, player.z-0.85),
+      toCam(player.x+0.85, 0.03, player.z+0.85), toCam(player.x-0.85, 0.03, player.z+0.85)
+    ], 'rgba(0,0,0,1)', null, 0.42 * sh + 0.1);
+  }
+
+  // ---- 粒子 ----
+  particles.forEach(p => {
+    const a = Math.max(0, p.life / p.max);
+    const c = toCam(p.x, p.y, p.z);
+    if(c[2] < NEAR) return;
+    const sp = project(c), r = Math.max(1, FOC / c[2] * p.s);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgb(' + p.c[0] + ',' + p.c[1] + ',' + p.c[2] + ')';
+    ctx.beginPath(); ctx.arc(sp[0], sp[1], r, 0, 6.2832); ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+
+  drawFaces();
+
+  // 速度线
+  if(speed > 22){
+    ctx.strokeStyle = 'rgba(150,220,255,' + Math.min(0.3, (speed-22)*0.02) + ')';
+    ctx.lineWidth = 2;
+    for(let i=0;i<8;i++){
+      const t = (performance.now()*0.0012 + i*0.125) % 1;
+      const ang = (i/8) * 6.2832 + 0.4;
+      const rr = t * Math.max(W,H) * 0.62;
+      const x1 = W/2 + Math.cos(ang)*rr, y1 = H/2 + Math.sin(ang)*rr;
+      const x2 = W/2 + Math.cos(ang)*(rr+46), y2 = H/2 + Math.sin(ang)*(rr+46);
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    }
+  }
+}
+
+/* ---------------- 逻辑更新 ---------------- */
+const keys = {};
+function update(dt){
+  // 左右移动
+  const left  = keys['a'] || keys['arrowleft'];
+  const right = keys['d'] || keys['arrowright'];
+  const accel = 78;
+  if(left)  player.vx -= accel*dt;
+  if(right) player.vx += accel*dt;
+  if(!left && !right) player.vx *= Math.pow(0.0016, dt);
+  player.vx = Math.max(-17, Math.min(17, player.vx));
+  player.x += player.vx*dt;
+  if(player.x < -ROAD_HALF + player.w){ player.x = -ROAD_HALF + player.w; player.vx *= -0.2; }
+  if(player.x >  ROAD_HALF - player.w){ player.x =  ROAD_HALF - player.w; player.vx *= -0.2; }
+  player.tilt += ((-player.vx * 0.028) - player.tilt) * Math.min(1, dt*10);
+
+  // 跳跃（长按更久）
+  const wantJump = keys[' '] || keys['w'] || keys['arrowup'];
+  if(wantJump && player.onGround){ player.vy = JUMP_V; player.onGround = false; sfxJump(); }
+  if(!wantJump && player.vy > 5) player.vy = 5;      // 松开提前下落
+
+  player.vy += GRAV*dt;
+  player.y  += player.vy*dt;
+  if(player.y <= 0){ player.y = 0; player.vy = 0; player.onGround = true; }
+
+  // 前进
+  speed = Math.min(46, 15 + dist * 0.018);
+  player.z += speed*dt;
+  dist = player.z;
+
+  // 连击计时
+  if(comboTimer > 0){ comboTimer -= dt; if(comboTimer <= 0) combo = 0; }
+
+  ensureWorld();
+  updateParticles(dt);
+
+  // 相机跟随
+  cam.x += (player.x * 0.55 - cam.x) * Math.min(1, dt*6);
+  cam.z = player.z - 11;
+  cam.y = 5.0 + player.y * 0.22;
+  cam.yaw += (-player.tilt * 0.22 - cam.yaw) * Math.min(1, dt*6);
+
+  // ---- 碰撞：金币 ----
+  coins.forEach(c => {
+    if(c.got) return;
+    if(Math.abs(c.z - player.z) < 1.5 &&
+       Math.abs(c.x - player.x) < 1.5 &&
+       Math.abs(c.y - (player.y + player.h*0.6)) < 1.7){
+      c.got = true; coinCount++; combo++; comboTimer = 2.2;
+      score += 10 * Math.max(1, Math.min(8, combo));
+      burst(c.x, c.y, c.z, [255, 215, 90], 10);
+      sfxCoin();
+      if(combo >= 3) showCombo(combo);
+    }
+  });
+
+  // ---- 碰撞：障碍 ----
+  obstacles.forEach(o => {
+    if(o.hit) return;
+    const overlapZ = Math.abs(o.z - player.z) < (o.sz/2 + player.w);
+    const overlapX = Math.abs(o.x - player.x) < (o.sx/2 + player.w);
+    const overlapY = player.y < o.sy - 0.15;
+    if(overlapZ && overlapX && overlapY) hitObstacle(o);
+  });
+
+  if(invuln > 0) invuln -= dt;
+  if(shake > 0) shake = Math.max(0, shake - dt*3);
+
+  score += speed * dt * 0.6;
+  updateHUD();
+}
+
+function hitObstacle(o){
+  o.hit = true;
+  burst(o.x, o.y, o.z, o.col, 22);
+  if(invuln > 0) return;
+  hp--; combo = 0; invuln = 1.8; shake = 1; speed = Math.max(15, speed - 6);
+  sfxHit();
+  updateHUD();
+  if(hp <= 0) gameOver();
+}
+
+function showCombo(n){
+  const el = document.getElementById('combo');
+  el.textContent = n + ' 连击!';
+  el.style.transition = 'none'; el.style.opacity = '1';
+  el.style.transform = 'translate(-50%,-50%) scale(1.35)';
+  requestAnimationFrame(() => {
+    el.style.transition = 'opacity .8s, transform .5s';
+    el.style.opacity = '0'; el.style.transform = 'translate(-50%,-90%) scale(1)';
+  });
+}
+
+/* ---------------- HUD ---------------- */
+function updateHUD(){
+  document.getElementById('hDist').textContent  = Math.floor(dist);
+  document.getElementById('hScore').textContent = Math.floor(score);
+  document.getElementById('hCoin').textContent  = coinCount;
+  document.getElementById('hSpd').textContent   = Math.round(speed * 3.6);
+  document.getElementById('hp').textContent = '♥'.repeat(Math.max(0,hp)) + '♡'.repeat(Math.max(0, 3-hp));
+}
+
+/* ---------------- 流程控制 ---------------- */
+function reset(){
+  obstacles = []; coins = []; pillars = []; particles = [];
+  dist = 0; score = 0; coinCount = 0; combo = 0; comboTimer = 0;
+  hp = 3; invuln = 0; speed = 15; shake = 0;
+  player.x = 0; player.y = 0; player.z = 0; player.vx = 0; player.vy = 0; player.onGround = true;
+  cam.x = 0; cam.yaw = 0; cam.z = -11;
+  spawnZ = 40; pillarZ = 0;
+  ensureWorld();
+}
+
+function startGame(){
+  reset();
+  state = 'play';
+  document.getElementById('cover').classList.add('hide');
+  document.getElementById('over').classList.add('hide');
+  document.getElementById('hud').classList.add('on');
+  try{ if(ac && ac.state === 'suspended') ac.resume(); }catch(e){}
+}
+
+function gameOver(){
+  state = 'over';
+  sfxOver();
+  score = Math.floor(score);
+  if(score > best){
+    best = score;
+    try{ localStorage.setItem('3dplayer_best', String(best)); }catch(e){}
+  }
+  document.getElementById('oDist').textContent  = Math.floor(dist) + ' m';
+  document.getElementById('oScore').textContent = Math.floor(score);
+  document.getElementById('oCoin').textContent  = coinCount;
+  showBest(document.getElementById('best'));
+  document.getElementById('hud').classList.remove('on');
+  document.getElementById('over').classList.remove('hide');
+}
+
+function togglePause(){
+  if(state === 'play'){ state = 'pause'; }
+  else if(state === 'pause'){ state = 'play'; lastTS = performance.now(); }
+}
+
+/* ---------------- 输入 ---------------- */
+document.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if([' ','arrowup','arrowdown','arrowleft','arrowright'].indexOf(k) >= 0) e.preventDefault();
+  keys[k] = true;
+  if(k === 'p' || k === 'escape') togglePause();
+  if((k === 'enter' || k === ' ') && (state === 'cover' || state === 'over')) startGame();
+  if(k === 'r' && state === 'play') startGame();
+});
+document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// 触屏：左右半屏移动，上滑跳跃
+let touchStart = null;
+cv.addEventListener('touchstart', e => {
+  const t = e.changedTouches[0];
+  touchStart = { x:t.clientX, y:t.clientY, t:performance.now(), moved:false };
+  if(t.clientX < window.innerWidth/2) keys['arrowleft'] = true; else keys['arrowright'] = true;
+}, { passive:true });
+cv.addEventListener('touchend', e => {
+  const t = e.changedTouches[0];
+  keys['arrowleft'] = keys['arrowright'] = false;
+  if(touchStart && touchStart.y - t.clientY > 34){ keys[' '] = true; setTimeout(()=>keys[' ']=false, 130); }
+  touchStart = null;
+}, { passive:true });
+
+document.getElementById('btnStart').addEventListener('click', startGame);
+document.getElementById('btnAgain').addEventListener('click', startGame);
+
+/* ---------------- 主循环 ---------------- */
+function loop(ts){
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, (ts - lastTS) / 1000 || 0.016);
+  lastTS = ts;
+
+  if(state === 'play' || state === 'over'){
+    if(state === 'play') update(dt);
+    // 结束页也保持缓慢推进的镜头
+    if(state === 'over'){ updateParticles(dt); cam.z = player.z - 12; }
+  } else if(state === 'cover'){
+    // 封面：镜头缓慢自动前进，作为动态背景
+    player.z += 9 * dt;
+    ensureWorld();
+    cam.x = Math.sin(ts * 0.0004) * 2.2;
+    cam.z = player.z - 11;
+    cam.yaw = Math.sin(ts * 0.0004) * 0.05;
+  }
+
+  ctx.save();
+  if(shake > 0){
+    ctx.translate((Math.random()-0.5) * 22 * shake, (Math.random()-0.5) * 22 * shake);
+  }
+  renderScene();
+  ctx.restore();
+
+  if(state === 'pause'){
+    ctx.fillStyle = 'rgba(4,6,16,.72)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#e8f0ff'; ctx.textAlign = 'center';
+    ctx.font = '700 44px "Segoe UI", "PingFang SC", sans-serif';
+    ctx.fillText('暂 停', W/2, H/2 - 6);
+    ctx.font = '15px "Segoe UI", "PingFang SC", sans-serif';
+    ctx.fillStyle = '#8fb3e8';
+    ctx.fillText('按 P 继续', W/2, H/2 + 30);
+  }
+}
+
+resize();
+reset();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>今天你拉屎了吗</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: #2a2a3e;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #wrap {
+    position: relative;
+    background: #1a1a2a;
+    border: 4px solid #6a4a2a;
+    box-shadow: 0 0 0 4px #1a1a2a, 0 0 0 8px #6a4a2a, 0 0 24px rgba(255,255,255,0.1);
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+
+  /* CRT 效果 */
+  #wrap::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.25) 50%);
+    background-size: 100% 4px;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* 启动覆盖层 */
+  #startOverlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    flex-direction: column;
+  }
+  #startOverlay.hidden { display: none; }
+  #startOverlay h1 {
+    color: #f5c542;
+    font-size: 34px;
+    text-shadow: 4px 4px 0 #6a4a2a, 8px 8px 0 rgba(0,0,0,0.4);
+    letter-spacing: 4px;
+    margin-bottom: 20px;
+  }
+  #startOverlay p { color: #fff; font-size: 15px; line-height: 1.9; text-align: center; margin: 3px 0; }
+  #startOverlay .key {
+    display: inline-block;
+    padding: 2px 10px;
+    background: #f5c542;
+    color: #1a1a2a;
+    border: 2px solid #6a4a2a;
+    margin: 0 4px;
+    font-weight: bold;
+  }
+  #startOverlay .rule-title { color: #f5c542; margin-top: 12px; font-weight: bold; }
+  #startOverlay button {
+    margin-top: 22px;
+    padding: 12px 28px;
+    background: #f5c542;
+    color: #1a1a2a;
+    border: 4px solid #6a4a2a;
+    font-family: inherit;
+    font-size: 20px;
+    cursor: pointer;
+    letter-spacing: 2px;
+  }
+  #startOverlay button:hover { background: #ffd55a; }
+  #startOverlay button:active { transform: translate(2px, 2px); }
+
+  /* 结束覆盖层 */
+  #endOverlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    flex-direction: column;
+  }
+  #endOverlay.hidden { display: none; }
+  #endOverlay h2 { color: #f5c542; font-size: 32px; margin-bottom: 10px; }
+  #endOverlay .score-big { color: #fff; font-size: 56px; margin: 10px 0; font-weight: bold; text-shadow: 3px 3px 0 #6a4a2a;}
+  #endOverlay .sub { color: #ccc; font-size: 14px; margin: 4px 0; }
+  #endOverlay button {
+    margin-top: 22px; padding: 12px 28px;
+    background: #f5c542; color: #1a1a2a;
+    border: 4px solid #6a4a2a;
+    font-family: inherit; font-size: 18px; cursor: pointer;
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="480" height="640"></canvas>
+
+  <div id="startOverlay">
+    <h1>今天你拉屎了吗</h1>
+    <p>马桶在下方乱跑（10 秒内至少经过你 4 次）</p>
+    <p>马桶到小人底下时 按 <span class="key">SPACE</span> 拉屎</p>
+    <p class="rule-title">—— 挑战规则 ——</p>
+    <p>游戏无限时长，尽量活下去拿高分</p>
+    <p>接住 <span style="color:#5fcf5f">+10 分</span>，接住的屎会跟着马桶一起跑</p>
+    <p><span style="color:#ff6060">15 秒</span>不拉屎 → 憋死，失败</p>
+    <p>连续拉偏 <span style="color:#ff6060">3 次</span> → 失败（命中即清零）</p>
+    <p>马桶带着屎经过你脚下 → 自动冲厕所</p>
+    <button id="startBtn">开始挑战</button>
+  </div>
+
+  <div id="endOverlay" class="hidden">
+    <h2 id="endTitle">GAME OVER</h2>
+    <div class="score-big" id="endScore">0</div>
+    <div class="sub" id="endSub"></div>
+    <button id="restartBtn">再来一把</button>
+  </div>
+</div>
+
+<script>
+// =====================================================
+//  今天你拉屎了吗 v2 - 像素小游戏
+//  规则：
+//   - 无限时长
+//   - 马桶10秒内至少经过玩家4次（速度有下限保证）
+//   - 15秒不拉屎 = 憋死失败
+//   - 连续拉在马桶外3次 = 失败（命中清零）
+//   - 命中+10，粑粑竖直下落进马桶，落入后跟着马桶一起跑
+//   - 马桶带着屎经过小人脚下时自动冲厕所（清空马桶）
+// =====================================================
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const PX = 4; // 像素块大小
+
+  // ---- 常量 ----
+  const HOLD_LIMIT = 15;      // 15秒不拉屎 → 失败
+  const MISS_LIMIT = 3;       // 连续拉偏3次 → 失败
+  const PASS_NEED = 4;        // 10秒内马桶至少经过4次
+  const PASS_WINDOW = 10;     // 检测窗口10秒
+  const MIN_SPEED = 195;      // 保证经过频率的最小速度(px/s)
+
+  // ---- 状态 ----
+  const STATE = { MENU: 0, PLAY: 1, END: 2 };
+  let state = STATE.MENU;
+  let score = 0;
+  let bestScore = parseInt(localStorage.getItem('poop_best') || '0', 10);
+  let holdTimer = HOLD_LIMIT;   // 憋屎倒计时
+  let missCount = 0;            // 拉在外面的次数
+  let endReason = '';           // 失败原因
+  let elapsed = 0;              // 已玩时长
+  let hitStreak = 0;            // 连击
+  let hitCount = 0;             // 累计接住次数
+
+  // 马桶经过检测（保证体验）
+  let passTimestamps = [];      // 最近经过屁股底下的时间点
+
+  // 小人
+  const player = {
+    x: W / 2,
+    y: 160,
+    width: 40,
+    buttY: 250,
+  };
+
+  // 马桶（加大版）
+  const toilet = {
+    x: 60,
+    y: 345,
+    width: 96,
+    height: 95,
+    vx: 0,
+  };
+  let toiletTimer = 0;
+
+  // 飞行中的屎
+  const poops = [];
+  // 马桶里接住的屎（跟马桶走）: 相对马桶中心的 x 偏移
+  const caughtPoops = [];
+
+  // 地上的屎（永久留在地上做标记）
+  const groundPoops = [];
+
+  function randomizeToilet() {
+    // 速度下限保证 10 秒内至少经过玩家 4 次
+    const speed = MIN_SPEED + Math.random() * 110; // 195 ~ 305 px/s
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    toilet.vx = dir * speed;
+    toiletTimer = 0.9 + Math.random() * 1.6;
+  }
+
+  function resetGame() {
+    score = 0;
+    holdTimer = HOLD_LIMIT;
+    missCount = 0;
+    elapsed = 0;
+    hitStreak = 0;
+    hitCount = 0;
+    endReason = '';
+    passTimestamps = [];
+    poops.length = 0;
+    caughtPoops.length = 0;
+    groundPoops.length = 0;
+    flushCooldown = 0;
+    flushParticles.length = 0;
+    flushCount = 0;
+    toilet.x = Math.random() * (W - toilet.width);
+    randomizeToilet();
+  }
+
+  // ---- 背景 ----
+  function drawBackground() {
+    ctx.fillStyle = '#8a7a6a';
+    ctx.fillRect(0, 0, W, H * 0.65);
+    ctx.fillStyle = '#a08a76';
+    for (let y = 0; y < H * 0.65; y += 24) {
+      const off = (y / 24) % 2 ? 32 : 0;
+      for (let x = -off; x < W; x += 64) {
+        ctx.fillRect(x, y, 60, 2);
+        ctx.fillRect(x, y, 2, 22);
+      }
+    }
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(0, H * 0.65, W, H * 0.35);
+    ctx.fillStyle = '#5a4030';
+    for (let x = 0; x < W; x += 24) {
+      ctx.fillRect(x, H * 0.65, 22, 2);
+    }
+  }
+
+  // ---- 小人（西装男） ----
+  const SPR = [
+    [0,0,2,2,2,2,2,2,2,2,2,2,0,0,0,0],
+    [0,0,2,2,2,2,2,2,2,2,2,2,0,0,0,0],
+    [0,2,2,2,2,2,2,2,2,2,2,2,2,0,0,0],
+    [0,2,2,2,2,2,2,2,2,2,2,2,2,0,0,0],
+    [0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
+    [0,0,1,1,6,6,1,1,6,6,1,1,0,0,0,0],
+    [0,0,1,1,6,6,1,1,6,6,1,1,0,0,0,0],
+    [0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
+    [0,0,1,1,1,7,7,7,7,1,1,1,0,0,0,0],
+    [0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
+    [0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
+    [0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
+    [0,3,3,3,3,5,5,5,5,3,3,3,3,0,0,0],
+    [0,3,4,3,3,5,5,5,5,3,3,4,3,0,0,0],
+    [0,3,3,3,3,5,5,5,5,3,3,3,3,0,0,0],
+    [0,3,3,3,3,5,5,5,5,3,3,3,3,0,0,0],
+    [0,3,3,3,3,5,8,5,8,3,3,3,3,0,0,0],
+    [0,3,3,3,3,3,5,5,5,3,3,3,3,0,0,0],
+    [0,3,3,3,3,3,5,5,5,3,3,3,3,0,0,0],
+    [0,3,3,3,3,3,5,5,5,3,3,3,3,0,0,0],
+    [0,3,3,3,3,3,5,5,5,3,3,3,3,0,0,0],
+    [0,3,4,3,3,3,5,5,5,3,3,4,3,0,0,0],
+    [0,3,3,3,3,3,5,5,5,3,3,3,3,0,0,0],
+    [0,0,3,3,3,0,0,0,0,3,3,3,0,0,0,0],
+  ];
+  const COLORS = {
+    0: null, 1: '#f5d0b0', 2: '#0d0d0d', 3: '#1a1a1a',
+    4: '#0a0a0a', 5: '#222222', 6: '#ffffff', 7: '#c8503a', 8: '#c8a050',
+  };
+
+  // 憋屎程度(0~1)，改变脸色
+  function strainFactor() {
+    return 1 - (holdTimer / HOLD_LIMIT);
+  }
+
+  function drawPlayer() {
+    const factor = state === STATE.PLAY ? strainFactor() : 0;
+    const ox = Math.round(player.x - (SPR[0].length * PX) / 2);
+    const oy = Math.round(player.y);
+    // 憋屎越久越抖
+    const jitter = factor > 0.6 ? (Math.random() - 0.5) * 3 * (factor - 0.6) / 0.4 : 0;
+    for (let r = 0; r < SPR.length; r++) {
+      for (let c = 0; c < SPR[r].length; c++) {
+        const v = SPR[r][c];
+        if (!v) continue;
+        let col = COLORS[v];
+        // 脸憋红了
+        if (v === 1 && factor > 0.4 && r >= 4 && r <= 11) {
+          const mix = (factor - 0.4) / 0.6;
+          col = blend('#f5d0b0', '#e06050', mix);
+        }
+        ctx.fillStyle = col;
+        ctx.fillRect(ox + c * PX + jitter, oy + r * PX, PX, PX);
+      }
+    }
+    // 憋屎提示：头顶冒汗
+    if (factor > 0.5 && Math.floor(elapsed * 4) % 2 === 0) {
+      ctx.fillStyle = '#7ec8f0';
+      ctx.fillRect(ox - 4, oy - 10, 3, 3);
+      ctx.fillRect(ox + 62, oy - 6, 3, 3);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(ox - 8, oy + SPR.length * PX + 12, SPR[0].length * PX + 16, 4);
+  }
+
+  function blend(c1, c2, t) {
+    const p = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+    const a = p(c1), b = p(c2);
+    return `rgb(${Math.round(a[0]+(b[0]-a[0])*t)},${Math.round(a[1]+(b[1]-a[1])*t)},${Math.round(a[2]+(b[2]-a[2])*t)})`;
+  }
+
+  // ---- 马桶（加大版 96 宽） ----
+  function drawToilet(x, y) {
+    ctx.fillStyle = '#f0f0f0';
+    ctx.fillRect(x + 12, y + 64, 72, 24);  // 底座
+    ctx.fillRect(x + 6, y + 42, 84, 26);   // 中部
+    ctx.fillRect(x, y + 28, 96, 18);       // 上沿（加宽水箱沿）
+    ctx.fillStyle = '#2a2a3a';
+    ctx.fillRect(x + 22, y + 33, 52, 11);  // 开口
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x + 8, y + 30, 10, 3);
+    ctx.fillRect(x + 8, y + 36, 3, 20);
+    ctx.fillRect(x + 18, y + 68, 16, 3);
+    ctx.fillStyle = '#a0a0a0';
+    ctx.fillRect(x + 3, y + 46, 3, 24);
+    ctx.fillRect(x + 18, y + 86, 58, 3);
+    // 水箱
+    ctx.fillStyle = '#f0f0f0';
+    ctx.fillRect(x + 62, y + 8, 26, 22);
+    ctx.fillStyle = '#a0a0a0';
+    ctx.fillRect(x + 62, y + 28, 26, 2);
+    ctx.fillRect(x + 86, y + 10, 2, 20);
+    ctx.fillStyle = '#888';
+    ctx.fillRect(x + 72, y + 2, 6, 8);
+    ctx.fillStyle = '#c8a050';
+    ctx.fillRect(x + 70, y, 10, 4);
+
+    // 马桶里接住的屎（跟着马桶一起走）
+    const cx = x + toilet.width / 2;
+    caughtPoops.forEach((off, i) => {
+      const py = y + 33 - i * 5; // 一层层往上堆
+      drawPoopShape(cx + off, py, i);
+    });
+  }
+
+  // ---- 屎形状 ----
+  function drawPoopShape(x, y, variant) {
+    const c = variant % 3 === 0 ? '#8b5a2b' : (variant % 3 === 1 ? '#7a4a20' : '#96633a');
+    const cd = '#5a3a18';
+    const ch = '#c89060';
+    ctx.fillStyle = c;
+    ctx.fillRect(x - 6, y, 12, 8);
+    ctx.fillRect(x - 4, y - 6, 8, 6);
+    ctx.fillStyle = ch;
+    ctx.fillRect(x - 4, y - 6, 2, 1);
+    ctx.fillRect(x + 1, y - 5, 2, 1);
+    ctx.fillStyle = cd;
+    ctx.fillRect(x - 6, y + 7, 12, 1);
+  }
+
+  function drawPoop(p) {
+    drawPoopShape(p.x, p.y, 0);
+  }
+
+  // ---- 拉屎 ----
+  let flash = null, flashT = 0, flashText = null, flashTextT = 0;
+
+  // 自动冲厕所
+  let flushCooldown = 0;      // 冲水冷却
+  let flushParticles = [];    // 水花粒子
+  let flushCount = 0;         // 累计冲了几次
+
+  function poop() {
+    const px = player.x;
+    const py = player.buttY + 8;
+    const tx = toilet.x + toilet.width / 2;
+    const inRange = Math.abs(px - tx) < (toilet.width / 2 - 2);
+    holdTimer = HOLD_LIMIT; // 拉了就重置憋屎计时
+    if (inRange) {
+      score += 10;
+      hitStreak++;
+      hitCount++;
+      missCount = 0; // 连续计数：命中即清零
+      const bonus = hitStreak >= 3 ? ` 连击x${hitStreak}!` : '';
+      flash = '#3ad14a'; flashT = 0.15;
+      flashText = `+10${bonus}`; flashTextT = 0.8;
+      // 屎飞向马桶开口（竖直下落，之后留在马桶里跟马桶走）
+      poops.push({ x: px, y: py, targetToilet: true, t: 0, falling: true });
+    } else {
+      score = Math.max(0, score - 5);
+      missCount++;
+      hitStreak = 0;
+      flash = '#ff5050'; flashT = 0.15;
+      flashText = `-5 拉偏了! (连续${missCount}/${MISS_LIMIT})`; flashTextT = 0.8;
+      poops.push({ x: px, y: py, targetToilet: false, t: 0, falling: true });
+      if (missCount >= MISS_LIMIT) {
+        endReason = 'miss';
+      }
+    }
+  }
+
+  // ---- HUD ----
+  function drawHUD() {
+    ctx.fillStyle = '#1a1a2a';
+    ctx.fillRect(0, 0, W, 38);
+    ctx.fillStyle = '#3a3a5a';
+    ctx.fillRect(0, 38, W, 2);
+
+    ctx.font = 'bold 15px "Courier New", monospace';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = '#f5c542';
+    ctx.textAlign = 'left';
+    ctx.fillText(`分数 ${score}`, 10, 19);
+
+    // 憋屎条（15秒）
+    const bw = 130, bx = W/2 - bw/2, by = 12, bh = 14;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
+    const ratio = holdTimer / HOLD_LIMIT;
+    ctx.fillStyle = ratio > 0.5 ? '#5fcf5f' : (ratio > 0.25 ? '#f5c542' : '#ff5050');
+    ctx.fillRect(bx, by, bw * ratio, bh);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 9px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`憋屎 ${holdTimer.toFixed(1)}s`, W/2, by + bh/2);
+
+    // 拉错次数（5颗心）
+    ctx.textAlign = 'right';
+    let hearts = '';
+    for (let i = 0; i < MISS_LIMIT; i++) hearts += i < (MISS_LIMIT - missCount) ? '♥' : '·';
+    ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.fillStyle = missCount >= MISS_LIMIT ? '#ff6060' : '#ff8080';
+    ctx.fillText(hearts, W - 10, 19);
+
+    ctx.font = '10px "Courier New", monospace';
+    ctx.fillStyle = '#888';
+    ctx.textAlign = 'center';
+    ctx.fillText('空格拉屎   ←/→ 移动', W / 2, H - 8);
+
+    // 浮动文字
+    if (flashTextT > 0 && flashText) {
+      ctx.globalAlpha = Math.min(1, flashTextT * 2);
+      ctx.font = 'bold 20px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = flashText.startsWith('+') ? '#7fff7f' : '#ff9090';
+      ctx.fillText(flashText, W / 2, 300 - (0.8 - flashTextT) * 30);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ---- 结束 ----
+  function endGame() {
+    state = STATE.END;
+    if (score > bestScore) {
+      bestScore = score;
+      localStorage.setItem('poop_best', String(bestScore));
+    }
+    let title, sub;
+    if (endReason === 'hold') {
+      title = '你憋死了…';
+      sub = '15 秒不拉屎，肠道罢工';
+    } else if (endReason === 'miss') {
+      title = '地板遭殃了';
+      sub = '连续拉偏 3 次，清洁工辞职了';
+    } else {
+      title = 'GAME OVER';
+      sub = '';
+    }
+    document.getElementById('endTitle').textContent = title;
+    document.getElementById('endTitle').style.color = '#ff6060';
+    document.getElementById('endScore').textContent = score;
+    document.getElementById('endSub').textContent =
+      `存活 ${elapsed.toFixed(1)} 秒　|　接住 ${hitCount} 次　|　冲厕所 ${flushCount} 次　|　最高分 ${bestScore}`;
+    document.getElementById('endOverlay').classList.remove('hidden');
+  }
+
+  // ---- 输入 ----
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (state === STATE.PLAY) poop();
+    } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      e.preventDefault();
+    }
+    keys[e.code] = true;
+  });
+  window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+  // ---- 主循环 ----
+  let lastWasUnder = false;
+  let last = performance.now();
+
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+
+    if (state === STATE.PLAY) {
+      elapsed += dt;
+
+      // 憋屎计时
+      holdTimer -= dt;
+      if (holdTimer <= 0) {
+        holdTimer = 0;
+        endReason = 'hold';
+        endGame();
+      }
+
+      // 马桶移动（随机方向/速度，但有速度下限）
+      toiletTimer -= dt;
+      if (toilet.x <= 0) { toilet.x = 0; randomizeToilet(); toilet.vx = Math.abs(toilet.vx); }
+      else if (toilet.x + toilet.width >= W) { toilet.x = W - toilet.width; randomizeToilet(); toilet.vx = -Math.abs(toilet.vx); }
+      else if (toiletTimer <= 0) {
+        randomizeToilet();
+      }
+      toilet.x += toilet.vx * dt;
+
+      // 经过检测（用于展示 & 保持压力节奏）
+      const tx = toilet.x + toilet.width / 2;
+      const isUnder = Math.abs(tx - player.x) < (toilet.width / 2 + 4);
+      if (isUnder && !lastWasUnder) {
+        passTimestamps.push(elapsed);
+        // 清理窗口外
+        passTimestamps = passTimestamps.filter(t => elapsed - t <= PASS_WINDOW);
+      }
+      lastWasUnder = isUnder;
+
+      // 自动冲厕所：马桶带着屎经过小人脚下时冲掉
+      flushCooldown -= dt;
+      if (flushCooldown <= 0 && caughtPoops.length > 0 &&
+          Math.abs(tx - player.x) < (toilet.width / 2 + 6)) {
+        const flushed = caughtPoops.length;
+        caughtPoops.length = 0;           // 屎被冲走
+        flushCooldown = 1.2;              // 冷却 1.2 秒
+        flushCount++;
+        // 水花粒子
+        const cx = toilet.x + toilet.width / 2;
+        const cy = toilet.y + 30;
+        for (let i = 0; i < 16; i++) {
+          flushParticles.push({
+            x: cx + (Math.random() - 0.5) * 50,
+            y: cy + (Math.random() - 0.5) * 14,
+            vx: (Math.random() - 0.5) * 220,
+            vy: -80 - Math.random() * 140,
+            life: 0.4 + Math.random() * 0.35,
+            t: 0,
+          });
+        }
+        flash = '#4a9fff'; flashT = 0.15;
+        flashText = `💦 冲厕所 x${flushed}!`; flashTextT = 0.9;
+      }
+      // 水花粒子更新
+      for (let i = flushParticles.length - 1; i >= 0; i--) {
+        const pt = flushParticles[i];
+        pt.t += dt;
+        pt.vy += 520 * dt;               // 重力
+        pt.x += pt.vx * dt;
+        pt.y += pt.vy * dt;
+        if (pt.t > pt.life) flushParticles.splice(i, 1);
+      }
+
+      // 玩家移动
+      const speed = 220;
+      if (keys['ArrowLeft']) player.x -= speed * dt;
+      if (keys['ArrowRight']) player.x += speed * dt;
+      player.x = Math.max(30, Math.min(W - 30, player.x));
+
+      // 屎更新（竖直下落轨道）
+      for (let i = poops.length - 1; i >= 0; i--) {
+        const p = poops[i];
+        if (p.falling) {
+          p.y += 700 * dt;   // 竖直下落，x 保持发射时的小人位置
+          if (p.targetToilet) {
+            // 命中：掉到马桶开口高度 → 进马桶（跟着马桶走）
+            if (p.y >= toilet.y + 33) {
+              caughtPoops.push((Math.random() - 0.5) * 16);
+              flash = '#4a9fff'; flashT = 0.08;
+              poops.splice(i, 1);
+            }
+          } else {
+            // 未命中：掉地上
+            if (p.y >= H - 60) {
+              groundPoops.push({ x: p.x, y: H - 60 + (Math.random()-0.5)*10 });
+              poops.splice(i, 1);
+            }
+          }
+        }
+      }
+
+      if (flashT > 0) flashT -= dt;
+      if (flashTextT > 0) flashTextT -= dt;
+
+      // 若已触发拉错失败，等飞行动画完再结束
+      if (endReason === 'miss' && poops.length === 0) {
+        endGame();
+      }
+    }
+
+    // ---- 渲染 ----
+    drawBackground();
+
+    // 地上的屎
+    groundPoops.forEach(g => drawPoopShape(g.x, g.y, 2));
+
+    drawPlayer();
+    drawToilet(toilet.x, toilet.y);
+    for (const p of poops) drawPoop(p);
+
+    // 冲厕所水花粒子
+    for (const pt of flushParticles) {
+      ctx.fillStyle = pt.t / pt.life < 0.5 ? '#8fd8ff' : '#4a9fff';
+      const s = 4;
+      ctx.fillRect(pt.x - s / 2, pt.y - s / 2, s, s);
+    }
+
+    if (flashT > 0 && flash) {
+      ctx.fillStyle = flash;
+      ctx.globalAlpha = Math.min(0.35, flashT * 2);
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
+
+    drawHUD();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- 开始 ----
+  function startGame() {
+    state = STATE.PLAY;
+    resetGame();
+    lastWasUnder = false;
+    document.getElementById('startOverlay').classList.add('hidden');
+    document.getElementById('endOverlay').classList.add('hidden');
+  }
+
+  document.getElementById('startBtn').addEventListener('click', startGame);
+  document.getElementById('restartBtn').addEventListener('click', startGame);
+
+  resetGame();
+  state = STATE.MENU;
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

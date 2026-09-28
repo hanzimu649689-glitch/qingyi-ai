@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>成语作战</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; user-select: none; -webkit-user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1510; font-family: 'PingFang SC','Microsoft YaHei','Heiti SC',sans-serif; }
+  #gameCanvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  .screen { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; background: rgba(20,16,12,0.92); color: #f4e4bc; text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-size: 11vw; margin-bottom: 2vh; color: #ffcc00; text-shadow: 0.6vw 0.6vw 0 #8b4513; letter-spacing: 1vw; }
+  h2 { font-size: 8vw; margin-bottom: 2vh; color: #ffcc00; text-shadow: 0.4vw 0.4vw 0 #8b4513; }
+  p { font-size: 4vw; margin-bottom: 1.5vh; line-height: 1.6; max-width: 92%; }
+  .btn { margin-top: 3vh; padding: 2.5vh 8vw; font-size: 5vw; font-family: inherit; font-weight: bold; color: #3e2723; background: #ffcc00; border: 0.8vw solid #f4e4bc; cursor: pointer; box-shadow: 0 1vh 0 #8b4513; }
+  .btn:active { transform: translateY(1vh); box-shadow: 0 0 0 #8b4513; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div id="startScreen" class="screen">
+    <h1>成语作战</h1>
+    <p>拖动底部相邻汉字，连出一条四字成语</p>
+    <p>拼对即出招攻击敌人，清空敌人血条获胜</p>
+    <p>像素风 · 零外链 · 双击即玩</p>
+    <button class="btn" id="startBtn">开始作战</button>
+  </div>
+  <div id="winScreen" class="screen hidden">
+    <h2>大获全胜！</h2>
+    <p id="winScore">最终得分：0</p>
+    <button class="btn" id="restartBtn">再来一局</button>
+  </div>
+  <div id="loseScreen" class="screen hidden">
+    <h2>作战失败</h2>
+    <p id="loseReason">被敌人击败</p>
+    <button class="btn" id="retryBtn">重试</button>
+  </div>
+</div>
+
+<script>
+// ================= 配置 =================
+const CFG = {
+  cols: 6, rows: 4,
+  heroSize: 0.22,
+  enemySize: 0.22,
+  bgTop: '#5d4037',
+  bgMid: '#8d6e63',
+  bgBot: '#4e342e',
+  panel: '#3e2723',
+  tile: '#d7ccc8',
+  tileSel: '#ffcc00',
+  tileBad: '#ff5252',
+  tileGood: '#69f0ae',
+  hero: '#4fc3f7',
+  enemy: '#ff5252',
+  hpHero: '#29b6f6',
+  hpEnemy: '#ff5252',
+  barBg: '#3e2723',
+  text: '#3e2723'
+};
+const FONT = "'PingFang SC','Microsoft YaHei','Heiti SC','SimHei',sans-serif";
+
+// ================= 成语词典 =================
+const IDIOM_SRC = (
+"日积月累 水滴石穿 持之以恒 坚持不懈 一丝不苟 专心致志 聚精会神 全神贯注 废寝忘食 勤学苦练 " +
+"学而不厌 温故知新 举一反三 融会贯通 循序渐进 精益求精 锲而不舍 滴水穿石 画龙点睛 锦上添花 " +
+"雪中送炭 雪上加霜 锦绣前程 鹏程万里 一帆风顺 万事如意 心想事成 称心如意 欣欣向荣 蒸蒸日上 " +
+"日新月异 突飞猛进 雨后春笋 生机勃勃 春暖花开 鸟语花香 山清水秀 风和日丽 五光十色 五彩缤纷 " +
+"万紫千红 花团锦簇 美不胜收 琳琅满目 目不暇接 流连忘返 心旷神怡 赏心悦目 栩栩如生 活灵活现 " +
+"惟妙惟肖 绘声绘色 妙笔生花 出神入化 炉火纯青 登峰造极 鬼斧神工 巧夺天工 一目了然 一清二楚 " +
+"了如指掌 心中有数 胸有成竹 运筹帷幄 决胜千里 稳操胜券 十拿九稳 万无一失 守株待兔 亡羊补牢 " +
+"掩耳盗铃 画蛇添足 自相矛盾 滥竽充数 刻舟求剑 拔苗助长 叶公好龙 井底之蛙 狐假虎威 鹬蚌相争 " +
+"螳螂捕蝉 朝三暮四 杯弓蛇影 草木皆兵 风声鹤唳 惊弓之鸟 抱薪救火 缘木求鱼 望梅止渴 画饼充饥 " +
+"南辕北辙 东施效颦 邯郸学步 对牛弹琴 班门弄斧 愚公移山 精卫填海 兴高采烈 喜出望外 欣喜若狂 " +
+"心花怒放 眉开眼笑 笑逐颜开 手舞足蹈 欢天喜地 载歌载舞 喜气洋洋 金玉良言 良师益友 鞠躬尽瘁 " +
+"呕心沥血 任劳任怨 无私奉献 助人为乐 舍己为人 见义勇为 光明磊落 堂堂正正 正大光明 刚正不阿 " +
+"铁面无私 大公无私 秉公执法 两袖清风 廉洁自律 高风亮节 海纳百川 有容乃大 虚怀若谷 谦虚谨慎 " +
+"戒骄戒躁 不耻下问 学海无涯 学富五车 才高八斗 博学多才 一诺千金 言而有信 诚实守信 言行一致 " +
+"表里如一 实事求是 顶天立地 浩然正气 千军万马 兵临城下 金戈铁马 刀光剑影 枪林弹雨 冲锋陷阵 " +
+"出奇制胜 攻其不备 出其不意 一鸣惊人 一举成名 名扬四海 举世闻名 家喻户晓 闻名遐迩 赫赫有名 " +
+"声名远扬 妇孺皆知 脍炙人口"
+).split(/\s+/).filter(w => w.length === 4);
+const IDIOMS = new Set(IDIOM_SRC);
+// 强力成语 → 必杀技
+const STRONG = new Set(["战无不胜","攻无不克","百战百胜","所向披靡","势如破竹","一往无前","气吞山河","排山倒海","雷霆万钧","横扫千军","披荆斩棘","冲锋陷阵","一往无前","乘胜追击"]);
+function isIdiom(s){ return s.length === 4 && IDIOMS.has(s); }
+function idiomPower(id){
+  if (STRONG.has(id)) return 70;
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 131 + id.charCodeAt(i)) >>> 0;
+  return 38 + (h % 23); // 38~60
+}
+
+// 随机填充用常用汉字池
+const HANZI_POOL = "山水风云火木金土日月星天地人和气力心手口目耳口鼻手脚头身飞跑跳打斗战攻守胜败强弱勇猛威武功剑刀枪兵马龙虎豹狼熊鹰英雄豪杰王侯春秋冬夏东西南北上下左右前后里外多少大小高低长风雷电雨雪江湖海云端林石桥路城门楼台阁殿宫花草木叶枝果香甜苦辣酸咸青红黄白黑金银铜铁玉珠宝石光景年岁时日书诗琴棋书画礼乐射御数理化天地玄黄宇宙洪荒";
+
+// ================= 全局 =================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let W, H, minSide;
+let score = 0, round = 1;
+let playerHP = 100, playerMax = 100, enemyHP = 100, enemyMax = 100;
+let tiles = [], path = [], currentWord = '';
+let state = 'START'; // START PLAY ATTACK DEFEND WIN LOSE
+let hero = {x:0,y:0,attacking:false,frame:0,dir:1};
+let enemy = {x:0,y:0,attacking:false,frame:0,dir:-1};
+let particles = [], floatTexts = [], shake = 0;
+let enemyTimer = 0, enemyAttackInterval = 4.5;
+
+function resize(){
+  W = window.innerWidth; H = window.innerHeight;
+  minSide = Math.min(W, H);
+  canvas.width = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ================= 初始化 =================
+function randHanzi(){
+  return HANZI_POOL[Math.floor(Math.random() * HANZI_POOL.length)];
+}
+function ensureIdiomOnBoard(){
+  const id = IDIOM_SRC[Math.floor(Math.random() * IDIOM_SRC.length)];
+  if (Math.random() < 0.5) {
+    const r = Math.floor(Math.random() * CFG.rows);
+    const cs = Math.floor(Math.random() * (CFG.cols - 3));
+    for (let i = 0; i < 4; i++) tiles[r * CFG.cols + cs + i].ch = id[i];
+  } else {
+    const c = Math.floor(Math.random() * CFG.cols);
+    const rs = Math.floor(Math.random() * (CFG.rows - 3));
+    for (let i = 0; i < 4; i++) tiles[(rs + i) * CFG.cols + c].ch = id[i];
+  }
+}
+function initGame(){
+  score = 0; round = 1;
+  playerHP = 100; playerMax = 100;
+  startRound();
+}
+function startRound(){
+  tiles = [];
+  for (let r = 0; r < CFG.rows; r++) {
+    for (let c = 0; c < CFG.cols; c++) {
+      tiles.push({r, c, ch: randHanzi(), sel: false, good: false, bad: false, pop: 0});
+    }
+  }
+  ensureIdiomOnBoard();
+  path = []; currentWord = '';
+  enemyMax = 80 + round * 40;
+  enemyHP = enemyMax;
+  enemyAttackInterval = Math.max(2.5, 5 - round * 0.5);
+  enemyTimer = 0;
+  hero.attacking = false; enemy.attacking = false;
+  state = 'PLAY';
+}
+
+// ================= 输入 =================
+function tileAt(x, y){
+  for (const t of tiles) {
+    if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h) return t;
+  }
+  return null;
+}
+function isNeighbor(a, b){
+  return Math.abs(a.r - b.r) + Math.abs(a.c - b.c) === 1;
+}
+function handleStart(x, y){
+  if (state !== 'PLAY') return;
+  const t = tileAt(x, y);
+  if (!t) return;
+  path = [t]; currentWord = t.ch;
+  tiles.forEach(tt => { tt.sel = false; tt.good = false; tt.bad = false; });
+  t.sel = true;
+}
+function handleMove(x, y){
+  if (state !== 'PLAY' || !path.length) return;
+  const t = tileAt(x, y);
+  if (!t) return;
+  const last = path[path.length - 1];
+  if (t === last) return;
+  if (path.length > 1 && t === path[path.length - 2]) {
+    last.sel = false;
+    path.pop();
+    currentWord = path.map(tt => tt.ch).join('');
+    return;
+  }
+  if (isNeighbor(last, t) && !path.includes(t)) {
+    path.push(t); t.sel = true;
+    currentWord = path.map(tt => tt.ch).join('');
+  }
+}
+function handleEnd(){
+  if (state !== 'PLAY') return;
+  tiles.forEach(t => { t.sel = false; t.good = false; t.bad = false; });
+  const word = currentWord;
+  if (isIdiom(word)) {
+    doAttack(word);
+  } else {
+    if (word.length) {
+      shake = 6;
+      playTone(160, 0.12, 'sawtooth');
+      addFloat(W/2, H*0.72, word.length < 4 ? '需连出四字成语' : '不是有效成语', '#ff5252');
+    }
+  }
+  path = []; currentWord = '';
+}
+
+// 鼠标/触摸
+let mouseDown = false;
+canvas.addEventListener('mousedown', e => { mouseDown = true; handleStart(e.clientX, e.clientY); });
+canvas.addEventListener('mousemove', e => { if (mouseDown) handleMove(e.clientX, e.clientY); });
+window.addEventListener('mouseup', () => { if (mouseDown) { mouseDown = false; handleEnd(); } });
+canvas.addEventListener('touchstart', e => { e.preventDefault(); handleStart(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+canvas.addEventListener('touchmove', e => { e.preventDefault(); handleMove(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+canvas.addEventListener('touchend', e => { e.preventDefault(); handleEnd(); }, {passive:false});
+
+// ================= 战斗逻辑 =================
+function doAttack(idiom){
+  state = 'ATTACK';
+  hero.attacking = true; hero.frame = 0;
+  const dmg = idiomPower(idiom);
+  const strong = STRONG.has(idiom);
+  const name = strong ? '必杀·' + idiom : '成语·' + idiom;
+  addFloat(W/2, H*0.45, `${name} -${dmg}`, '#ffcc00');
+  playTone(strong ? 660 : 440 + (dmg % 40) * 6, 0.15, 'square');
+  score += dmg;
+  setTimeout(() => {
+    path.forEach(t => { t.ch = randHanzi(); t.pop = 15; });
+    setTimeout(() => {
+      enemyHP -= dmg;
+      spawnParticles(enemy.x, enemy.y, strong ? '#ffcc00' : '#ff5252', strong ? 18 : 12);
+      shake = strong ? 16 : 10;
+      playTone(strong ? 200 : 220, 0.2, 'sawtooth');
+      if (enemyHP <= 0) {
+        setTimeout(roundWin, 400);
+      } else {
+        hero.attacking = false;
+        state = 'PLAY';
+      }
+    }, 200);
+  }, 350);
+}
+function enemyAttack(){
+  if (state !== 'PLAY') return;
+  state = 'DEFEND';
+  enemy.attacking = true; enemy.frame = 0;
+  playTone(300, 0.15, 'sawtooth');
+  setTimeout(() => {
+    const dmg = 8 + round * 3;
+    playerHP -= dmg;
+    spawnParticles(hero.x, hero.y, '#4fc3f7', 10);
+    shake = 8;
+    addFloat(W*0.25, H*0.45, `-${dmg}`, '#ff5252');
+    playTone(180, 0.2, 'sawtooth');
+    if (playerHP <= 0) {
+      setTimeout(() => lose('被敌人击败'), 400);
+    } else {
+      enemy.attacking = false;
+      state = 'PLAY';
+    }
+  }, 400);
+}
+function roundWin(){
+  if (round >= 3) {
+    showScreen('win');
+    document.getElementById('winScore').textContent = `最终得分：${score}`;
+  } else {
+    round++;
+    score += 100;
+    startRound();
+    addFloat(W/2, H*0.45, `第 ${round} 回合`, '#ffcc00');
+  }
+}
+function lose(reason){
+  state = 'LOSE';
+  showScreen('lose');
+  document.getElementById('loseReason').textContent = reason;
+}
+
+// ================= 更新 =================
+function update(dt){
+  if (shake > 0) shake *= 0.9;
+  if (state === 'PLAY') {
+    enemyTimer += dt;
+    if (enemyTimer >= enemyAttackInterval) {
+      enemyTimer = 0;
+      enemyAttack();
+    }
+  }
+  particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.5; p.life--; });
+  particles = particles.filter(p => p.life > 0);
+  floatTexts.forEach(f => { f.y -= 1.2; f.life--; });
+  floatTexts = floatTexts.filter(f => f.life > 0);
+  tiles.forEach(t => { if (t.pop > 0) t.pop--; });
+  if (hero.attacking) hero.frame++;
+  if (enemy.attacking) enemy.frame++;
+}
+
+// ================= 渲染 =================
+function draw(){
+  ctx.save();
+  if (shake > 0.5) ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake);
+
+  const grd = ctx.createLinearGradient(0, 0, 0, H);
+  grd.addColorStop(0, CFG.bgTop); grd.addColorStop(0.45, CFG.bgMid); grd.addColorStop(1, CFG.bgBot);
+  ctx.fillStyle = grd; ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.fillRect(0, H*0.62, W, H*0.38);
+
+  drawBars();
+
+  hero.x = W * 0.22; hero.y = H * 0.44;
+  enemy.x = W * 0.78; enemy.y = H * 0.44;
+
+  ctx.save();
+  ctx.translate(enemy.x, enemy.y);
+  if (enemy.attacking) ctx.translate(-Math.min(enemy.frame * W*0.008, W*0.12), 0);
+  drawFighter(ctx, 0, 0, CFG.enemySize, CFG.enemy, false);
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(hero.x, hero.y);
+  if (hero.attacking) ctx.translate(Math.min(hero.frame * W*0.008, W*0.12), 0);
+  drawFighter(ctx, 0, 0, CFG.heroSize, CFG.hero, true);
+  ctx.restore();
+
+  drawGrid();
+
+  particles.forEach(p => {
+    ctx.globalAlpha = Math.max(0, p.life / 30);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.s/2, p.y - p.s/2, p.s, p.s);
+  });
+  ctx.globalAlpha = 1;
+
+  floatTexts.forEach(f => {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.font = `bold ${Math.floor(minSide*0.05)}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(f.text, f.x + 2, f.y + 2);
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, f.x, f.y);
+  });
+
+  ctx.restore();
+}
+
+function drawBars(){
+  const barH = H * 0.035, barW = W * 0.38, y = H * 0.04;
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.floor(minSide*0.035)}px ${FONT}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('你', W*0.03, y + barH/2);
+  ctx.fillStyle = CFG.barBg;
+  roundRect(ctx, W*0.09, y, barW, barH, barH/4);
+  ctx.fill();
+  const hpW = barW * Math.max(0, playerHP / playerMax);
+  const gr1 = ctx.createLinearGradient(W*0.09, 0, W*0.09 + barW, 0);
+  gr1.addColorStop(0, '#0288d1'); gr1.addColorStop(1, '#4fc3f7');
+  ctx.fillStyle = gr1;
+  roundRect(ctx, W*0.09, y, hpW, barH, barH/4);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'right';
+  ctx.fillText('敌人', W*0.97, y + barH/2);
+  ctx.fillStyle = CFG.barBg;
+  roundRect(ctx, W - W*0.09 - barW, y, barW, barH, barH/4);
+  ctx.fill();
+  const eW = barW * Math.max(0, enemyHP / enemyMax);
+  const gr2 = ctx.createLinearGradient(W - W*0.09 - barW, 0, W - W*0.09, 0);
+  gr2.addColorStop(0, '#ff5252'); gr2.addColorStop(1, '#b71c1c');
+  ctx.fillStyle = gr2;
+  roundRect(ctx, W - W*0.09 - eW, y, eW, barH, barH/4);
+  ctx.fill();
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = `bold ${Math.floor(minSide*0.04)}px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`当前：战斗阶段  回合 ${round}/3`, W/2, y + barH*1.8);
+}
+
+function drawGrid(){
+  const margin = W * 0.04;
+  const panelW = W - margin * 2;
+  const panelH = H * 0.30;
+  const panelX = margin;
+  const panelY = H * 0.66;
+  ctx.fillStyle = CFG.panel;
+  roundRect(ctx, panelX, panelY, panelW, panelH, margin * 0.4);
+  ctx.fill();
+  ctx.strokeStyle = '#6d4c41'; ctx.lineWidth = 3;
+  ctx.stroke();
+
+  const tw = panelW / CFG.cols;
+  const th = panelH / CFG.rows;
+  const gap = Math.min(tw, th) * 0.08;
+  tiles.forEach(t => {
+    t.x = panelX + t.c * tw + gap/2;
+    t.y = panelY + t.r * th + gap/2;
+    t.w = tw - gap;
+    t.h = th - gap;
+    const pop = t.pop ? Math.sin(t.pop/15 * Math.PI) * gap * 0.5 : 0;
+    const cx = t.x + t.w/2, cy = t.y + t.h/2;
+    const sx = t.w - pop*2, sy = t.h - pop*2;
+    ctx.fillStyle = t.good ? CFG.tileGood : (t.bad ? CFG.tileBad : (t.sel ? CFG.tileSel : CFG.tile));
+    roundRect(ctx, cx - sx/2, cy - sy/2, sx, sy, gap);
+    ctx.fill();
+    ctx.strokeStyle = '#5d4037'; ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = CFG.text;
+    ctx.font = `bold ${Math.floor(Math.min(t.w, t.h) * 0.55)}px ${FONT}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(t.ch, cx, cy + sy*0.04);
+  });
+
+  if (currentWord) {
+    const valid = isIdiom(currentWord);
+    ctx.fillStyle = valid ? '#69f0ae' : '#fff';
+    ctx.font = `bold ${Math.floor(minSide*0.055)}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillText((valid ? '✓ ' : '') + currentWord + (valid ? '（成语！）' : ''), W/2, panelY - H*0.02);
+  }
+}
+
+function drawFighter(c, x, y, s, color, isHero){
+  c.save(); c.translate(x, y);
+  const f = s * minSide * 0.35;
+  c.fillStyle = '#fff';
+  c.fillRect(-f*0.35, f*0.25, f*0.22, f*0.55);
+  c.fillRect(f*0.13, f*0.25, f*0.22, f*0.55);
+  c.fillStyle = '#3e2723';
+  c.fillRect(-f*0.38, f*0.75, f*0.28, f*0.12);
+  c.fillRect(f*0.10, f*0.75, f*0.28, f*0.12);
+  c.fillStyle = color;
+  c.fillRect(-f*0.4, -f*0.25, f*0.8, f*0.55);
+  c.fillStyle = '#3e2723';
+  c.fillRect(-f*0.4, f*0.15, f*0.8, f*0.1);
+  c.fillStyle = '#ffccbc';
+  c.fillRect(-f*0.28, -f*0.65, f*0.56, f*0.45);
+  c.fillStyle = '#3e2723';
+  c.fillRect(-f*0.3, -f*0.7, f*0.6, f*0.15);
+  c.fillStyle = '#000';
+  const eyeOff = isHero ? -f*0.12 : f*0.12;
+  c.fillRect(-f*0.12 + eyeOff, -f*0.5, f*0.08, f*0.08);
+  c.fillRect(f*0.04 + eyeOff, -f*0.5, f*0.08, f*0.08);
+  c.fillStyle = '#ffccbc';
+  const armX = isHero ? f*0.35 : -f*0.55;
+  c.fillRect(armX, -f*0.2, f*0.22, f*0.45);
+  c.fillStyle = color;
+  c.fillRect(armX + (isHero ? f*0.05 : -f*0.05), -f*0.28, f*0.22, f*0.18);
+  c.restore();
+}
+
+function roundRect(c, x, y, w, h, r){
+  const rr = Math.min(r, w/2, h/2);
+  c.beginPath();
+  c.moveTo(x + rr, y);
+  c.lineTo(x + w - rr, y);
+  c.quadraticCurveTo(x + w, y, x + w, y + rr);
+  c.lineTo(x + w, y + h - rr);
+  c.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  c.lineTo(x + rr, y + h);
+  c.quadraticCurveTo(x, y + h, x, y + h - rr);
+  c.lineTo(x, y + rr);
+  c.quadraticCurveTo(x, y, x + rr, y);
+  c.closePath();
+}
+
+function spawnParticles(x, y, color, count){
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = Math.random() * minSide * 0.006 + minSide * 0.002;
+    particles.push({x, y, color, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - minSide*0.004, s: Math.random()*minSide*0.018 + 3, life: 25 + Math.random()*15});
+  }
+}
+function addFloat(x, y, text, color){
+  floatTexts.push({x, y, text, color, life: 50});
+}
+
+// ================= 音频 =================
+let audioCtx = null;
+function playTone(freq, dur, type){
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = type || 'square';
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.08, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + dur);
+  } catch(e){}
+}
+
+// ================= UI =================
+function showScreen(name){
+  ['start','win','lose'].forEach(n => document.getElementById(n + 'Screen').classList.add('hidden'));
+  if (name) document.getElementById(name + 'Screen').classList.remove('hidden');
+}
+
+document.getElementById('startBtn').addEventListener('click', () => { showScreen(null); initGame(); });
+document.getElementById('restartBtn').addEventListener('click', () => { showScreen(null); initGame(); });
+document.getElementById('retryBtn').addEventListener('click', () => { showScreen(null); initGame(); });
+
+// ================= 主循环 =================
+let last = performance.now();
+function loop(now){
+  const dt = (now - last) / 1000; last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+showScreen('start');
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

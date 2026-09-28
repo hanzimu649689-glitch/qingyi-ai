@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+/* ============ 设计令牌 ============ */
+@theme {
+  --color-ink: #05070a;
+  --color-ink2: #0a0e14;
+  --color-panel: #0d1219;
+  --color-line: #1b2431;
+  --color-fg: #e8edf5;
+  --color-muted: #8a94a6;
+  --color-cyan: #00e5ff;
+  --color-violet: #7c5cff;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+
+  --ease-expo: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root {
+  --dur-micro: 160ms;
+  --dur-enter: 560ms;
+  --dur-chapter: 900ms;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01" on;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection { background: color-mix(in srgb, var(--color-cyan) 32%, transparent); }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--color-ink); }
+::-webkit-scrollbar-thumb { background: #1d2635; border-radius: 99px; border: 3px solid var(--color-ink); }
+::-webkit-scrollbar-thumb:hover { background: #2b374a; }
+
+/* ============ 排版 ============ */
+.h-display {
+  font-size: clamp(2.4rem, 7vw, 6rem);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+}
+.h1 { font-size: clamp(2rem, 4.6vw, 3.6rem); line-height: 1.06; letter-spacing: -0.028em; font-weight: 600; }
+.h2 { font-size: clamp(1.5rem, 2.8vw, 2.3rem); line-height: 1.14; letter-spacing: -0.022em; font-weight: 600; }
+.h3 { font-size: clamp(1.1rem, 1.6vw, 1.35rem); line-height: 1.3; letter-spacing: -0.012em; font-weight: 600; }
+.lead { font-size: clamp(1rem, 1.35vw, 1.18rem); line-height: 1.75; color: var(--color-muted); }
+.body { font-size: 0.97rem; line-height: 1.8; color: var(--color-muted); }
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-cyan);
+}
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ============ 布局 ============ */
+.wrap { width: 100%; max-width: 1240px; margin: 0 auto; padding: 0 clamp(1.1rem, 4vw, 2.6rem); }
+.wrap-wide { width: 100%; max-width: 1560px; margin: 0 auto; padding: 0 clamp(1.1rem, 4vw, 2.6rem); }
+.section { padding: clamp(4.5rem, 11vh, 9rem) 0; }
+
+/* ============ 质感 ============ */
+.hair { height: 1px; background: linear-gradient(90deg, transparent, var(--color-line) 18%, var(--color-line) 82%, transparent); }
+.glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  backdrop-filter: blur(14px) saturate(120%);
+}
+.card {
+  position: relative;
+  background: linear-gradient(180deg, #0c1119, #080c12);
+  border: 1px solid var(--color-line);
+  border-radius: 16px;
+  transition: border-color var(--dur-micro) var(--ease-soft), transform var(--dur-micro) var(--ease-soft);
+}
+.card-hover:hover { border-color: #2c3a4e; transform: translateY(-3px); }
+.grain::after {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none; opacity: 0.35; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'160\' height=\'160\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.85\' numOctaves=\'3\'/%3E%3C/filter%3E%3Crect width=\'160\' height=\'160\' filter=\'url(%23n)\' opacity=\'0.42\'/%3E%3C/svg%3E");
+}
+.glow-cyan { box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.25), 0 0 44px -8px rgba(0, 229, 255, 0.34); }
+.text-grad {
+  background: linear-gradient(100deg, #ffffff 8%, #b9e8ff 42%, #7c5cff 92%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* ============ 动效基元 ============ */
+.reveal { opacity: 0; transform: translate3d(0, 22px, 0); transition: opacity var(--dur-enter) var(--ease-expo), transform var(--dur-enter) var(--ease-expo); will-change: opacity, transform; }
+.reveal.in { opacity: 1; transform: none; }
+.reveal-d1 { transition-delay: 80ms; }
+.reveal-d2 { transition-delay: 160ms; }
+.reveal-d3 { transition-delay: 240ms; }
+.reveal-d4 { transition-delay: 320ms; }
+
+@keyframes floaty { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes shimmer { 0% { background-position: -220% 0; } 100% { background-position: 220% 0; } }
+@keyframes scanline { 0% { transform: translateY(-100%); } 100% { transform: translateY(220%); } }
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+@keyframes pulse-ring { 0% { transform: scale(0.9); opacity: 0.55; } 70% { transform: scale(1.5); opacity: 0; } 100% { opacity: 0; } }
+.anim-floaty { animation: floaty 6s var(--ease-soft) infinite; }
+.anim-scan { animation: scanline 3.4s linear infinite; }
+.anim-spin-slow { animation: spin-slow 26s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .anim-floaty, .anim-scan, .anim-spin-slow { animation: none !important; }
+}
+
+/* ============ 3D 章节 ============ */
+.chapter { position: relative; min-height: 100vh; }
+.prod-canvas { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+.prod-canvas.interactive { pointer-events: auto; cursor: grab; }
+.prod-canvas.interactive:active { cursor: grabbing; }
+.overlay { position: relative; z-index: 2; }
+
+.hint {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--color-muted);
+}
+.hint i { display: inline-block; width: 22px; height: 1px; background: var(--color-cyan); }

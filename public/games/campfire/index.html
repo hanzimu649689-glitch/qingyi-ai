@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>篝火大作战</title>
+<style>
+  html,body{margin:0;padding:0;background:#1a0e14;overflow:hidden;height:100%;}
+  canvas{display:block;image-rendering:pixelated;cursor:crosshair;}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+"use strict";
+/* ============================================================
+   《篝火大作战》  单文件 HTML5 游戏 · 像素风 · 零外链
+   玩法：守住中央篝火！
+   - 怪物从黑暗森林涌来，哥布林怕火（火圈内减速）
+   - 砍树得木头：给篝火添柴（维持火光）+ 建哨塔
+   - 旋转斧头 + 火球术自动攻击，升级三选一
+   - 篝火熄灭 或 玩家倒下 = 失败
+   ============================================================ */
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let W=0,H=0;
+function resize(){ W=cv.width=window.innerWidth; H=cv.height=window.innerHeight; ctx.imageSmoothingEnabled=false; }
+window.addEventListener('resize',resize); resize();
+
+// ---------- 工具 ----------
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const rndi=(a,b)=>Math.floor(rnd(a,b+1));
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const TAU=Math.PI*2;
+
+// ---------- 音效（WebAudio 合成，无外部文件） ----------
+let AC=null;
+function sfx(type){
+  try{
+    if(!AC) AC=new (window.AudioContext||window.webkitAudioContext)();
+    const t=AC.currentTime, o=AC.createOscillator(), g=AC.createGain();
+    o.connect(g); g.connect(AC.destination);
+    const P={ // [波形, 起频, 止频, 时长, 音量]
+      hit:['square',300,120,0.07,0.05],   // 命中
+      chop:['triangle',180,90,0.08,0.08], // 砍树
+      wood:['triangle',500,250,0.1,0.07], // 拾取木头
+      gem:['sine',700,1100,0.09,0.05],    // 拾取宝石
+      up:['sine',500,1000,0.25,0.09],     // 升级
+      hurt:['sawtooth',200,80,0.15,0.08], // 受伤
+      fire:['square',600,200,0.08,0.03],  // 火球
+      die:['sawtooth',150,40,0.5,0.1],    // 死亡
+      tower:['sine',400,600,0.15,0.07],   // 建塔
+      wave:['sine',220,330,0.4,0.08],     // 波次
+      boss:['sawtooth',100,60,0.6,0.12],  // Boss
+    }[type];
+    if(!P) return;
+    o.type=P[0]; o.frequency.setValueAtTime(P[1],t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(P[2],1),t+P[3]);
+    g.gain.setValueAtTime(P[4],t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+P[3]);
+    o.start(t); o.stop(t+P[3]+0.02);
+  }catch(e){}
+}
+
+// ---------- 世界常量 ----------
+const WORLD=1800;                       // 世界大小（正方形）
+const CX=WORLD/2, CY=WORLD/2;           // 篝火位置
+const CAMP_W=560, CAMP_H=460;           // 中央营地矩形
+const FIRE_MAX=100;                     // 篝火燃料上限
+const TREE_HP=36;
+
+// ---------- 输入 ----------
+const keys={};
+window.addEventListener('keydown',e=>{
+  keys[e.key.toLowerCase()]=true;
+  if(e.key.toLowerCase()==='p'&&G.state==='play') G.paused=!G.paused;
+  if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase()))e.preventDefault();
+});
+window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+// 触屏虚拟摇杆
+const stick={active:false,sx:0,sy:0,dx:0,dy:0};
+cv.addEventListener('touchstart',e=>{
+  const t=e.touches[0]; stick.active=true; stick.sx=t.clientX; stick.sy=t.clientY; stick.dx=stick.dy=0;
+  e.preventDefault();
+},{passive:false});
+cv.addEventListener('touchmove',e=>{
+  if(!stick.active)return;
+  const t=e.touches[0];
+  let dx=t.clientX-stick.sx, dy=t.clientY-stick.sy;
+  const m=Math.hypot(dx,dy);
+  if(m>50){dx=dx/m*50;dy=dy/m*50;}
+  stick.dx=dx; stick.dy=dy; e.preventDefault();
+},{passive:false});
+cv.addEventListener('touchend',()=>{stick.active=false;stick.dx=stick.dy=0;});
+// 鼠标：点击塔位建造/升级
+const mouse={x:0,y:0,click:false};
+cv.addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
+cv.addEventListener('mousedown',e=>{mouse.x=e.clientX;mouse.y=e.clientY;mouse.click=true;});
+
+// ---------- 游戏状态 ----------
+const G={
+  state:'title',   // title | play | levelup | over
+  paused:false,
+  time:0, wave:0, kills:0, wood:0, gems:0, gemNeed:5, level:1,
+  waveTimer:0, waveSpawnLeft:0, spawnTimer:0, inWave:false,
+  msg:'', msgT:0, shake:0,
+  choice:[],       // 升级三选一
+};
+
+const player={
+  x:CX, y:CY+60, r:11, hp:100, hpMax:100, speed:150,
+  dir:1, face:1, walkT:0,
+  axes:1, axDmg:11, axSpin:2.6, axRad:54, axAng:0,
+  fireDmg:16, fireCd:1.25, fireT:0, fireN:1,
+  pickup:70, woodPow:10, hurtT:0, regen:0,
+};
+
+const fire={fuel:70, burnT:0, flick:0};
+
+let enemies=[], gems=[], woods=[], arrows=[], fires=[], spears=[], trees=[], towers=[], parts=[], floats=[];
+const TOWER_SPOTS=[];  // 四角塔位
+{
+  const ox=CAMP_W/2-40, oy=CAMP_H/2-40;
+  [[-ox,-oy],[ox,-oy],[-ox,oy],[ox,oy]].forEach(p=>TOWER_SPOTS.push({x:CX+p[0],y:CY+p[1],tower:null,hov:false}));
+}
+
+// ---------- 生成 ----------
+function makeTrees(n){
+  for(let i=0;i<n;i++){
+    // 树长在营地外的森林里
+    let x,y,tries=0;
+    do{
+      x=rnd(60,WORLD-60); y=rnd(60,WORLD-60); tries++;
+    }while(tries<40 && Math.abs(x-CX)<CAMP_W/2+50 && Math.abs(y-CY)<CAMP_H/2+50);
+    trees.push({x,y,hp:TREE_HP,max:TREE_HP,chopT:0,shake:0,seed:rndi(0,9),growT:0});
+  }
+}
+function spawnEnemy(type){
+  // 从营地外世界边缘生成（黑暗处）
+  const side=rndi(0,3);
+  let x,y;
+  if(side===0){x=rnd(0,WORLD);y=rnd(0,80);}
+  else if(side===1){x=rnd(0,WORLD);y=rnd(WORLD-80,WORLD);}
+  else if(side===2){x=rnd(0,80);y=rnd(0,WORLD);}
+  else {x=rnd(WORLD-80,WORLD);y=rnd(0,WORLD);}
+  const w=G.wave;
+  const base={x,y,vx:0,vy:0,hurtT:0,atkT:0,type};
+  if(type==='goblin') Object.assign(base,{hp:16+w*6,hpMax:16+w*6,sp:62+w*1.5,dmg:8,r:10,gem:1});
+  else if(type==='thrower') Object.assign(base,{hp:12+w*5,hpMax:12+w*5,sp:48,dmg:6,r:10,gem:2,shootT:rnd(0.5,1.5)});
+  else if(type==='brute') Object.assign(base,{hp:70+w*16,hpMax:70+w*16,sp:40,dmg:16,r:15,gem:5});
+  else if(type==='boss') Object.assign(base,{hp:500+w*90,hpMax:500+w*90,sp:34,dmg:26,r:22,gem:30,name:'哥布林大王'});
+  enemies.push(base);
+}
+
+function startWave(){
+  G.wave++; G.inWave=true;
+  const bossWave=G.wave%5===0;
+  let count=6+G.wave*3;
+  if(bossWave){ count=Math.floor(count*1.6); spawnEnemy('boss'); G.msg='一大波怪潮正在来袭...'; G.msgT=3; sfx('boss'); }
+  else { G.msg='第 '+G.wave+' 波'; G.msgT=2; sfx('wave'); }
+  G.waveSpawnLeft=count; G.spawnTimer=0;
+  G.waveTimer=8; // 波间歇（下一波倒计时基础）
+}
+
+// ---------- 升级 ----------
+const UPGRADES=[
+  {id:'axN', name:'斧头 +1',   desc:'多一把旋转飞斧', can:()=>player.axes<8, do:()=>player.axes++},
+  {id:'axSp',name:'旋转加速',  desc:'斧头转速加快',   can:()=>true, do:()=>player.axSpin+=0.7},
+  {id:'axDm',name:'斧刃磨利',  desc:'斧头伤害 +6',    can:()=>true, do:()=>player.axDmg+=6},
+  {id:'fbDm',name:'火球术强化',desc:'火球伤害 +10',   can:()=>true, do:()=>player.fireDmg+=10},
+  {id:'fbN', name:'火球 +1',   desc:'同时多发射一颗', can:()=>player.fireN<5, do:()=>player.fireN++},
+  {id:'fbCd',name:'施法提速',  desc:'火球间隔 -0.2s', can:()=>player.fireCd>0.5, do:()=>player.fireCd=Math.max(0.5,player.fireCd-0.2)},
+  {id:'spd', name:'疾风之靴',  desc:'移动速度 +18',   can:()=>player.speed<260, do:()=>player.speed+=18},
+  {id:'hp',  name:'强健体魄',  desc:'血量上限 +25 并回满', can:()=>true, do:()=>{player.hpMax+=25;player.hp=player.hpMax;}},
+  {id:'pick',name:'磁力手套',  desc:'拾取范围 +40',   can:()=>player.pickup<220, do:()=>player.pickup+=40},
+  {id:'wood',name:'添柴工艺',  desc:'每根木头多烧 6 燃料', can:()=>player.woodPow<40, do:()=>player.woodPow+=6},
+  {id:'rgn', name:'野性回复',  desc:'每秒回复 1 血',  can:()=>player.regen<4, do:()=>player.regen+=1},
+];
+function offerLevelUp(){
+  const pool=UPGRADES.filter(u=>u.can());
+  G.choice=[];
+  while(G.choice.length<3 && pool.length){ G.choice.push(pool.splice(rndi(0,pool.length-1),1)[0]); }
+  G.state='levelup'; sfx('up');
+}
+
+// ---------- 伤害数字 / 粒子 ----------
+function floatTxt(x,y,txt,col){ floats.push({x,y,txt,col,t:0.8}); }
+function burst(x,y,col,n,sp){ for(let i=0;i<n;i++){const a=rnd(0,TAU),s=rnd(20,sp||90);parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,t:rnd(0.3,0.7),col});} }
+
+// ---------- 核心逻辑 ----------
+function hitEnemy(e,dmg,kx,ky){
+  e.hp-=dmg; e.hurtT=0.12;
+  if(kx||ky){e.vx+=kx;e.vy+=ky;}
+  floatTxt(e.x,e.y-e.r-6,Math.round(dmg),'#ffd66e');
+  if(e.hp<=0){
+    e.dead=true; G.kills++;
+    burst(e.x,e.y,'#7cb544',10);
+    gems.push({x:e.x+rnd(-6,6),y:e.y+rnd(-6,6),v:e.gem,t:0});
+    if(Math.random()<0.28) woods.push({x:e.x+rnd(-10,10),y:e.y+rnd(-10,10),t:0});
+    sfx('hit');
+  }
+}
+
+function buildOrUpgradeTower(spot){
+  const t=spot.tower;
+  if(!t){
+    if(G.wood<30){floatTxt(spot.x,spot.y-30,'木头不够!','#ff7b6e');return;}
+    G.wood-=30; spot.tower={lvl:1,cd:0,ang:0}; sfx('tower');
+    floatTxt(spot.x,spot.y-30,'哨塔建成!','#8be28b');
+  }else if(t.lvl<4){
+    const cost=30+t.lvl*20;
+    if(G.wood<cost){floatTxt(spot.x,spot.y-30,'木头不够!','#ff7b6e');return;}
+    G.wood-=cost; t.lvl++; sfx('tower');
+    floatTxt(spot.x,spot.y-30,'哨塔 Lv'+t.lvl,'#8be28b');
+  }else floatTxt(spot.x,spot.y-30,'已满级','#aaa');
+}
+
+function update(dt){
+  G.time+=dt;
+  if(G.shake>0)G.shake=Math.max(0,G.shake-dt*3);
+  if(G.msgT>0)G.msgT-=dt;
+
+  // ===== 玩家移动 =====
+  let mx=0,my=0;
+  if(keys['w']||keys['arrowup'])my--;
+  if(keys['s']||keys['arrowdown'])my++;
+  if(keys['a']||keys['arrowleft'])mx--;
+  if(keys['d']||keys['arrowright'])mx++;
+  if(stick.active){mx=stick.dx/50;my=stick.dy/50;}
+  const mm=Math.hypot(mx,my);
+  if(mm>0.15){
+    mx/=Math.max(1,mm); my/=Math.max(1,mm);
+    player.x=clamp(player.x+mx*player.speed*dt,20,WORLD-20);
+    player.y=clamp(player.y+my*player.speed*dt,20,WORLD-20);
+    player.walkT+=dt*10; if(Math.abs(mx)>0.1)player.face=mx>0?1:-1;
+  }else player.walkT=0;
+  if(player.hurtT>0)player.hurtT-=dt;
+  if(player.regen>0)player.hp=Math.min(player.hpMax,player.hp+player.regen*dt);
+
+  // ===== 篝火燃烧 =====
+  fire.fuel-=dt*(1.0+G.wave*0.04);
+  fire.flick+=dt*8;
+  if(fire.fuel<=0){ fire.fuel=0; gameOver('篝火熄灭了...'); return; }
+
+  // ===== 砍树 =====
+  for(const t of trees){
+    if(t.growT>0){ t.growT-=dt; if(t.growT<=0){t.hp=t.max;} continue; }
+    if(t.shake>0)t.shake-=dt*4;
+    const d=Math.hypot(player.x-t.x,player.y-t.y);
+    if(d<34){
+      t.chopT-=dt;
+      if(t.chopT<=0){
+        t.chopT=0.4; t.hp-=10; t.shake=1; sfx('chop');
+        burst(t.x,t.y-18,'#7cb544',3,60);
+        if(t.hp<=0){
+          t.growT=30; // 30秒后重新长出
+          const n=3;
+          for(let i=0;i<n;i++) woods.push({x:t.x+rnd(-14,14),y:t.y+rnd(-14,14),t:0});
+          burst(t.x,t.y-10,'#a8743f',12,120);
+        }
+      }
+    }
+  }
+
+  // ===== 木头拾取 → 添柴 =====
+  for(const w of woods){
+    w.t+=dt;
+    const d=Math.hypot(player.x-w.x,player.y-w.y);
+    if(d<player.pickup){ // 磁吸
+      w.x+=(player.x-w.x)/d*260*dt; w.y+=(player.y-w.y)/d*260*dt;
+    }
+    if(d<16){
+      w.dead=true; G.wood++;
+      fire.fuel=Math.min(FIRE_MAX,fire.fuel+player.woodPow);
+      floatTxt(w.x,w.y-10,'+'+player.woodPow+' 燃料','#ffb347'); sfx('wood');
+    }
+  }
+  woods=woods.filter(w=>!w.dead);
+
+  // ===== 宝石拾取 / 升级 =====
+  for(const g of gems){
+    g.t+=dt;
+    const d=Math.hypot(player.x-g.x,player.y-g.y);
+    if(d<player.pickup){ g.x+=(player.x-g.x)/d*300*dt; g.y+=(player.y-g.y)/d*300*dt; }
+    if(d<16){
+      g.dead=true; G.gems+=g.v; sfx('gem');
+      if(G.gems>=G.gemNeed){ G.gems-=G.gemNeed; G.level++; G.gemNeed=5+G.level*4; offerLevelUp(); }
+    }
+  }
+  gems=gems.filter(g=>!g.dead);
+  if(G.state!=='play')return;
+
+  // ===== 旋转斧头 =====
+  player.axAng+=player.axSpin*dt;
+  for(let i=0;i<player.axes;i++){
+    const a=player.axAng+i*TAU/player.axes;
+    const ax=player.x+Math.cos(a)*player.axRad, ay=player.y+Math.sin(a)*player.axRad;
+    for(const e of enemies){
+      if(e.dead)continue;
+      if(Math.hypot(e.x-ax,e.y-ay)<e.r+11){
+        if(!e.axT||e.axT<=0){ hitEnemy(e,player.axDmg,Math.cos(a)*60,Math.sin(a)*60); e.axT=0.4; }
+      }
+    }
+  }
+  for(const e of enemies) if(e.axT>0)e.axT-=dt;
+
+  // ===== 火球术（自动瞄准最近敌人） =====
+  player.fireT-=dt;
+  if(player.fireT<=0){
+    // 找最近的 fireN 个敌人
+    const near=enemies.filter(e=>!e.dead).sort((a,b)=>dist(a,player)-dist(b,player)).slice(0,player.fireN);
+    if(near.length){
+      player.fireT=player.fireCd;
+      for(const e of near){
+        const a=Math.atan2(e.y-player.y,e.x-player.x);
+        fires.push({x:player.x,y:player.y,vx:Math.cos(a)*330,vy:Math.sin(a)*330,t:2.2,dmg:player.fireDmg});
+      }
+      sfx('fire');
+    }
+  }
+  for(const f of fires){
+    f.t-=dt; f.x+=f.vx*dt; f.y+=f.vy*dt;
+    if(f.t<=0||f.x<0||f.y<0||f.x>WORLD||f.y>WORLD){f.dead=true;continue;}
+    for(const e of enemies){
+      if(e.dead)continue;
+      if(Math.hypot(e.x-f.x,e.y-f.y)<e.r+7){
+        f.dead=true;
+        burst(f.x,f.y,'#ff8c3a',8,110);
+        // 小范围溅射
+        for(const e2 of enemies){ if(!e2.dead&&Math.hypot(e2.x-f.x,e2.y-f.y)<46) hitEnemy(e2,f.dmg); }
+        break;
+      }
+    }
+  }
+  fires=fires.filter(f=>!f.dead);
+
+  // ===== 哨塔 =====
+  for(const spot of TOWER_SPOTS){
+    const t=spot.tower; if(!t)continue;
+    t.cd-=dt;
+    // 瞄准最近敌人
+    let best=null,bd=300+t.lvl*20;
+    for(const e of enemies){ if(e.dead)continue; const d=dist(e,spot); if(d<bd){bd=d;best=e;} }
+    if(best){
+      t.ang=Math.atan2(best.y-spot.y,best.x-spot.x);
+      if(t.cd<=0){
+        t.cd=0.9-t.lvl*0.1;
+        arrows.push({x:spot.x,y:spot.y-18,vx:Math.cos(t.ang)*380,vy:Math.sin(t.ang)*380,t:1.5,dmg:12+t.lvl*8});
+      }
+    }
+  }
+  for(const a of arrows){
+    a.t-=dt; a.x+=a.vx*dt; a.y+=a.vy*dt;
+    if(a.t<=0){a.dead=true;continue;}
+    for(const e of enemies){
+      if(e.dead)continue;
+      if(Math.hypot(e.x-a.x,e.y-a.y)<e.r+6){ hitEnemy(e,a.dmg,a.vx*0.1,a.vy*0.1); a.dead=true; break; }
+    }
+  }
+  arrows=arrows.filter(a=>!a.dead);
+
+  // ===== 敌人 =====
+  for(const e of enemies){
+    if(e.dead)continue;
+    if(e.hurtT>0)e.hurtT-=dt;
+    // 目标：玩家优先；玩家离得远则打篝火
+    const dp=dist(e,player);
+    const tgt = dp<420 ? player : {x:CX,y:CY};
+    // 火光减速：普通哥布林怕火
+    const fireR=fireRadius();
+    const inFire=Math.hypot(e.x-CX,e.y-CY)<fireR;
+    const slow=(inFire&&e.type!=='brute'&&e.type!=='boss')?0.55:1;
+    const d=Math.max(1,dist(e,tgt));
+    const sp=e.sp*slow;
+    if(e.type==='thrower'){
+      // 远程：保持 180 距离放矛
+      const want=180;
+      if(d>want+20){e.x+=(tgt.x-e.x)/d*sp*dt;e.y+=(tgt.y-e.y)/d*sp*dt;}
+      else if(d<want-40){e.x-=(tgt.x-e.x)/d*sp*0.7*dt;e.y-=(tgt.y-e.y)/d*sp*0.7*dt;}
+      e.shootT-=dt;
+      if(e.shootT<=0&&d<300){ e.shootT=2.2;
+        const a=Math.atan2(tgt.y-e.y,tgt.x-e.x);
+        spears.push({x:e.x,y:e.y,vx:Math.cos(a)*230,vy:Math.sin(a)*230,t:2,dmg:e.dmg});
+      }
+    }else{
+      e.x+=(tgt.x-e.x)/d*sp*dt; e.y+=(tgt.y-e.y)/d*sp*dt;
+      e.atkT-=dt;
+      const dr=dist(e,tgt);
+      if(dr<e.r+tgt.r+4&&e.atkT<=0){
+        e.atkT=1;
+        if(tgt===player){ damagePlayer(e.dmg); }
+        else { fire.fuel=Math.max(0,fire.fuel-e.dmg*0.7); burst(CX+rnd(-10,10),CY-10,'#ff6b4a',4,60); floatTxt(e.x,e.y-e.r-8,'篝火 -'+Math.round(e.dmg*0.7),'#ff7b6e'); }
+      }
+    }
+    // 击退衰减
+    e.x+=e.vx*dt; e.y+=e.vy*dt; e.vx*=0.85; e.vy*=0.85;
+  }
+  // 敌人间简单分离
+  for(let i=0;i<enemies.length;i++)for(let j=i+1;j<enemies.length;j++){
+    const a=enemies[i],b=enemies[j]; if(a.dead||b.dead)continue;
+    const d=Math.hypot(a.x-b.x,a.y-b.y), min=a.r+b.r;
+    if(d<min&&d>0.01){ const push=(min-d)/2, nx=(a.x-b.x)/d, ny=(a.y-b.y)/d;
+      a.x+=nx*push;a.y+=ny*push;b.x-=nx*push;b.y-=ny*push; }
+  }
+  enemies=enemies.filter(e=>!e.dead);
+
+  for(const s of spears){
+    s.t-=dt; s.x+=s.vx*dt; s.y+=s.vy*dt;
+    if(s.t<=0){s.dead=true;continue;}
+    if(Math.hypot(player.x-s.x,player.y-s.y)<player.r+5){ damagePlayer(s.dmg); s.dead=true; }
+  }
+  spears=spears.filter(s=>!s.dead);
+
+  // ===== 波次调度 =====
+  if(G.inWave){
+    if(G.waveSpawnLeft>0){
+      G.spawnTimer-=dt;
+      if(G.spawnTimer<=0){
+        G.spawnTimer=clamp(0.5-G.wave*0.015,0.15,0.5);
+        const r=Math.random();
+        let type='goblin';
+        if(G.wave>=3&&r<0.22)type='thrower';
+        if(G.wave>=6&&r>0.88)type='brute';
+        spawnEnemy(type); G.waveSpawnLeft--;
+      }
+    }else if(enemies.length===0){
+      G.inWave=false; G.waveTimer=6;
+      G.msg='怪物已清空，快砍树添柴！'; G.msgT=3;
+      // 波间奖励
+      fire.fuel=Math.min(FIRE_MAX,fire.fuel+8);
+    }
+  }else{
+    G.waveTimer-=dt;
+    if(G.waveTimer<=0)startWave();
+  }
+
+  // ===== 粒子/飘字 =====
+  for(const p of parts){p.t-=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vx*=0.94;p.vy*=0.94;}
+  parts=parts.filter(p=>p.t>0);
+  for(const f of floats){f.t-=dt;f.y-=30*dt;}
+  floats=floats.filter(f=>f.t>0);
+}
+
+function damagePlayer(dmg){
+  player.hp-=dmg; player.hurtT=0.4; G.shake=1; sfx('hurt');
+  burst(player.x,player.y,'#ff5b4a',6,90);
+  if(player.hp<=0){ player.hp=0; gameOver('勇者倒下了...'); }
+}
+function fireRadius(){ return 110+ (fire.fuel/FIRE_MAX)*250; }
+
+function gameOver(reason){
+  G.state='over'; G.reason=reason; sfx('die');
+}
+
+function startGame(){
+  G.state='play'; G.paused=false; G.time=0; G.wave=0; G.kills=0; G.wood=6; G.gems=0; G.gemNeed=5; G.level=1;
+  G.waveTimer=4; G.inWave=false; G.msgT=0; G.shake=0;
+  Object.assign(player,{x:CX,y:CY+70,hp:100,hpMax:100,axes:1,axDmg:11,axSpin:2.6,axRad:54,fireDmg:16,fireCd:1.25,fireT:0,fireN:1,pickup:70,woodPow:10,regen:0,hurtT:0});
+  fire.fuel=70;
+  enemies=[];gems=[];woods=[];arrows=[];fires=[];spears=[];parts=[];floats=[];
+  trees=[]; makeTrees(34);
+  for(const s of TOWER_SPOTS)s.tower=null;
+  startWave();
+}
+
+// ================= 绘制 =================
+const lightCv=document.createElement('canvas');
+const lctx=lightCv.getContext('2d');
+
+let camX=0,camY=0;
+
+function draw(){
+  const sx=(Math.random()-0.5)*G.shake*10, sy=(Math.random()-0.5)*G.shake*10;
+  camX=clamp(player.x-W/2,0,WORLD-W); camY=clamp(player.y-H/2,0,WORLD-H);
+  if(W>WORLD)camX=(WORLD-W)/2; if(H>WORLD)camY=(WORLD-H)/2;
+  const ox=-camX+sx, oy=-camY+sy;
+
+  // ---- 地面 ----
+  ctx.fillStyle='#47262f'; ctx.fillRect(0,0,W,H); // 黑暗森林底色
+  // 森林纹理（暗红色调，致敬视频）
+  ctx.fillStyle='#5b2f3a';
+  const step=90;
+  for(let gx=Math.floor(camX/step)*step;gx<camX+W;gx+=step)
+    for(let gy=Math.floor(camY/step)*step;gy<camY+H;gy+=step){
+      ctx.fillRect(gx-ox+((gx*7)%40),gy-oy+((gy*13)%40),30,18);
+    }
+  // 中央营地（土黄矩形）
+  const cx0=CX-CAMP_W/2-ox, cy0=CY-CAMP_H/2-oy;
+  ctx.fillStyle='#c8a06a'; ctx.fillRect(cx0,cy0,CAMP_W,CAMP_H);
+  ctx.fillStyle='#b8905c';
+  for(let i=0;i<8;i++)ctx.fillRect(cx0+20+i*70,cy0+12,26,8);
+  // 营地边框
+  ctx.strokeStyle='#8a6840'; ctx.lineWidth=4; ctx.strokeRect(cx0+2,cy0+2,CAMP_W-4,CAMP_H-4);
+
+  ctx.save(); ctx.translate(ox,oy);
+
+  // ---- 塔位 ----
+  for(const spot of TOWER_SPOTS){
+    const t=spot.tower;
+    // 底座
+    ctx.fillStyle='#7a5c38'; ctx.fillRect(spot.x-16,spot.y-4,32,10);
+    if(t){
+      // 哨塔：石塔+塔顶
+      ctx.fillStyle='#9aa0a8'; ctx.fillRect(spot.x-11,spot.y-34,22,32);
+      ctx.fillStyle='#7d838b'; ctx.fillRect(spot.x-11,spot.y-34,7,32);
+      ctx.fillStyle='#5c4a6e'; ctx.beginPath();
+      ctx.moveTo(spot.x-15,spot.y-34); ctx.lineTo(spot.x+15,spot.y-34); ctx.lineTo(spot.x,spot.y-52); ctx.closePath(); ctx.fill();
+      // 弓箭手小人
+      ctx.fillStyle='#e8c890'; ctx.fillRect(spot.x-3,spot.y-30,6,6);
+      // 等级星
+      ctx.fillStyle='#ffd54a';
+      for(let i=0;i<t.lvl;i++)ctx.fillRect(spot.x-12+i*7,spot.y+10,5,5);
+    }else{
+      ctx.fillStyle='#6b5a42'; ctx.fillRect(spot.x-8,spot.y-14,16,14);
+      ctx.fillStyle='#ffe08a'; ctx.font='bold 11px monospace'; ctx.textAlign='center';
+      ctx.fillText('30木',spot.x,spot.y+18);
+    }
+  }
+
+  // ---- 树 ----
+  for(const t of trees){
+    if(t.growT>0){
+      if(t.growT<5){ // 快长好时画小苗
+        ctx.fillStyle='#4e8f3a'; ctx.fillRect(t.x-2,t.y-6,4,6);
+      }
+      continue;
+    }
+    const sh=t.shake>0?Math.sin(G.time*40)*2*t.shake:0;
+    ctx.fillStyle='#5c3a22'; ctx.fillRect(t.x-3+sh,t.y-10,6,12);
+    ctx.fillStyle='#3e7a2e'; ctx.fillRect(t.x-14+sh,t.y-34,28,24);
+    ctx.fillStyle='#4e9a3a'; ctx.fillRect(t.x-10+sh,t.y-30,14,10);
+    ctx.fillStyle='#356b28'; ctx.fillRect(t.x-14+sh,t.y-16,28,6);
+    // 血条
+    if(t.hp<t.max){
+      ctx.fillStyle='#331'; ctx.fillRect(t.x-12,t.y-42,24,4);
+      ctx.fillStyle='#7cb544'; ctx.fillRect(t.x-12,t.y-42,24*t.hp/t.max,4);
+    }
+  }
+
+  // ---- 篝火 ----
+  drawCampfire(CX,CY);
+
+  // ---- 木头 ----
+  for(const w of woods){
+    const bob=Math.sin(G.time*5+w.x)*2;
+    ctx.fillStyle='#8a5a2e'; ctx.fillRect(w.x-7,w.y-3+bob,14,6);
+    ctx.fillStyle='#c89858'; ctx.fillRect(w.x-7,w.y-3+bob,3,6);
+  }
+  // ---- 宝石 ----
+  for(const g of gems){
+    const bob=Math.sin(G.time*6+g.x)*2;
+    ctx.fillStyle='#4ae0d8'; ctx.fillRect(g.x-4,g.y-4+bob,8,8);
+    ctx.fillStyle='#aef7f2'; ctx.fillRect(g.x-4,g.y-4+bob,4,4);
+  }
+
+  // ---- 敌人 ----
+  for(const e of enemies)drawEnemy(e);
+
+  // ---- 长矛 ----
+  ctx.strokeStyle='#c8b090'; ctx.lineWidth=3;
+  for(const s of spears){
+    const a=Math.atan2(s.vy,s.vx);
+    ctx.beginPath();
+    ctx.moveTo(s.x-Math.cos(a)*8,s.y-Math.sin(a)*8);
+    ctx.lineTo(s.x+Math.cos(a)*8,s.y+Math.sin(a)*8);
+    ctx.stroke();
+  }
+  // ---- 箭 ----
+  ctx.strokeStyle='#e8d8a0'; ctx.lineWidth=2;
+  for(const a of arrows){
+    const ang=Math.atan2(a.vy,a.vx);
+    ctx.beginPath();
+    ctx.moveTo(a.x-Math.cos(ang)*7,a.y-Math.sin(ang)*7);
+    ctx.lineTo(a.x+Math.cos(ang)*7,a.y+Math.sin(ang)*7);
+    ctx.stroke();
+  }
+  // ---- 火球 ----
+  for(const f of fires){
+    ctx.fillStyle='#ff9a3a'; ctx.fillRect(f.x-6,f.y-6,12,12);
+    ctx.fillStyle='#ffe07a'; ctx.fillRect(f.x-3,f.y-3,6,6);
+  }
+
+  // ---- 宠物小狗 ----
+  const px=player.x-player.face*22, py=player.y+8+Math.sin(G.time*4)*2;
+  ctx.fillStyle='#f0f0f0'; ctx.fillRect(px-6,py-5,12,8);
+  ctx.fillStyle='#fff'; ctx.fillRect(px+player.face*4,py-8,6,5);
+  ctx.fillStyle='#333'; ctx.fillRect(px+player.face*6,py-7,2,2);
+  ctx.fillRect(px-player.face*7,py-6,2,4); // 尾巴
+
+  // ---- 玩家 ----
+  drawPlayer();
+
+  // ---- 旋转斧头 ----
+  for(let i=0;i<player.axes;i++){
+    const a=player.axAng+i*TAU/player.axes;
+    const ax=player.x+Math.cos(a)*player.axRad, ay=player.y+Math.sin(a)*player.axRad;
+    ctx.save(); ctx.translate(ax,ay); ctx.rotate(a+G.time*20);
+    ctx.fillStyle='#c0c8d0'; ctx.fillRect(2,-6,8,12);
+    ctx.fillStyle='#8a5a2e'; ctx.fillRect(-8,-2,10,4);
+    ctx.restore();
+  }
+
+  // ---- 粒子 ----
+  for(const p of parts){
+    ctx.globalAlpha=Math.min(1,p.t*2.5);
+    ctx.fillStyle=p.col; ctx.fillRect(p.x-2,p.y-2,4,4);
+  }
+  ctx.globalAlpha=1;
+
+  ctx.restore();
+
+  // ---- 光照层（黑暗 + 火光） ----
+  drawLight(ox,oy);
+
+  // ---- 篝火燃料条（世界内） ----
+  const fr=fireRadius();
+  ctx.save(); ctx.translate(ox,oy);
+  const bw=90, bx=CX-bw/2, by=CY-fr-24;
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(bx-2,by-2,bw+4,10);
+  ctx.fillStyle=fire.fuel<25?'#ff5b4a':'#ff9a3a'; ctx.fillRect(bx,by,bw*fire.fuel/FIRE_MAX,6);
+  ctx.fillStyle='#fff'; ctx.font='bold 10px monospace'; ctx.textAlign='center';
+  ctx.fillText('篝火 '+Math.ceil(fire.fuel),CX,by-5);
+  // 玩家血条
+  const pbw=44;
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(player.x-pbw/2-1,player.y-26,pbw+2,7);
+  ctx.fillStyle='#5be05b'; ctx.fillRect(player.x-pbw/2,player.y-25,pbw*player.hp/player.hpMax,5);
+
+  // ---- 飘字 ----
+  ctx.font='bold 13px monospace';
+  for(const f of floats){
+    ctx.globalAlpha=Math.min(1,f.t*2);
+    ctx.fillStyle=f.col; ctx.textAlign='center';
+    ctx.fillText(f.txt,f.x,f.y);
+  }
+  ctx.globalAlpha=1;
+  ctx.restore();
+
+  // ---- HUD ----
+  drawHUD();
+
+  // ---- 大提示 ----
+  if(G.msgT>0){
+    ctx.globalAlpha=Math.min(1,G.msgT);
+    ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,H*0.16,W,44);
+    ctx.fillStyle='#ffd54a'; ctx.font='bold 26px monospace'; ctx.textAlign='center';
+    ctx.fillText(G.msg,W/2,H*0.16+31);
+    ctx.globalAlpha=1;
+  }
+
+  // ---- 界面 ----
+  if(G.state==='title')drawTitle();
+  else if(G.state==='levelup')drawLevelUp();
+  else if(G.state==='over')drawOver();
+  else if(G.paused){
+    ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#fff'; ctx.font='bold 30px monospace'; ctx.textAlign='center';
+    ctx.fillText('已暂停 (P 继续)',W/2,H/2);
+  }
+  mouse.click=false;
+}
+
+function drawCampfire(x,y){
+  const fl=Math.sin(fire.flick)*2+Math.sin(fire.flick*2.3)*1.5;
+  // 石圈
+  ctx.fillStyle='#8d8d8d';
+  for(let i=0;i<8;i++){const a=i/8*TAU;ctx.fillRect(x+Math.cos(a)*20-4,y+Math.sin(a)*20-4,8,8);}
+  // 柴堆
+  ctx.fillStyle='#6b4423'; ctx.fillRect(x-12,y+2,24,5);
+  ctx.fillStyle='#8a5a2e'; ctx.fillRect(x-9,y-3,18,5);
+  // 火焰（燃料越旺越大）
+  const s=0.5+(fire.fuel/FIRE_MAX)*0.9;
+  ctx.fillStyle='#ff6b1a'; ctx.fillRect(x-7*s,y-16*s+fl*s,14*s,14*s);
+  ctx.fillStyle='#ffa030'; ctx.fillRect(x-5*s,y-12*s+fl*s,10*s,10*s);
+  ctx.fillStyle='#ffe27a'; ctx.fillRect(x-3*s,y-8*s+fl*s,6*s,6*s);
+  // 火星
+  if(Math.random()<0.3)parts.push({x:x+rnd(-6,6),y:y-14,vx:rnd(-8,8),vy:rnd(-50,-25),t:rnd(0.4,0.8),col:'#ffcf6a'});
+}
+
+function drawPlayer(){
+  const p=player, bob=p.walkT?Math.sin(p.walkT)*2:0;
+  if(p.hurtT>0&&Math.floor(G.time*20)%2)return; // 受击闪烁
+  const x=p.x, y=p.y+bob;
+  ctx.fillStyle='#3e6db5'; ctx.fillRect(x-8,y-8,16,14);        // 身体（蓝衣）
+  ctx.fillStyle='#2d5490'; ctx.fillRect(x-8,y+2,16,4);
+  ctx.fillStyle='#e8c890'; ctx.fillRect(x-6,y-16,12,9);        // 脸
+  ctx.fillStyle='#6b4423'; ctx.fillRect(x-7,y-19,14,4);        // 头发
+  ctx.fillStyle='#333'; ctx.fillRect(x+p.face*2,y-13,2,2);     // 眼睛
+  ctx.fillStyle='#c8a05a'; ctx.fillRect(x-10,y-4,4,8); ctx.fillRect(x+6,y-4,4,8); // 手
+  ctx.fillStyle='#4a3a2a'; ctx.fillRect(x-6,y+6,5,7); ctx.fillRect(x+1,y+6,5,7);  // 腿
+}
+
+function drawEnemy(e){
+  const x=e.x,y=e.y;
+  if(e.hurtT>0){ ctx.save(); ctx.globalAlpha=0.6; }
+  if(e.type==='goblin'){
+    ctx.fillStyle='#5e8f3a'; ctx.fillRect(x-8,y-8,16,13);
+    ctx.fillStyle='#7cb544'; ctx.fillRect(x-6,y-16,12,9);
+    ctx.fillStyle='#4a6e2a'; ctx.fillRect(x-11,y-12,4,8); ctx.fillRect(x+7,y-12,4,8); // 耳朵
+    ctx.fillStyle='#c33'; ctx.fillRect(x-5,y-13,3,2); ctx.fillRect(x+2,y-13,3,2);     // 红眼
+  }else if(e.type==='thrower'){
+    ctx.fillStyle='#6e5a8f'; ctx.fillRect(x-8,y-8,16,13);
+    ctx.fillStyle='#8f7ab5'; ctx.fillRect(x-6,y-16,12,9);
+    ctx.fillStyle='#4a3a63'; ctx.fillRect(x-9,y-18,18,4); // 兜帽
+    ctx.fillStyle='#ffd54a'; ctx.fillRect(x-4,y-13,3,2); ctx.fillRect(x+1,y-13,3,2);
+  }else if(e.type==='brute'){
+    ctx.fillStyle='#3f6e2e'; ctx.fillRect(x-14,y-12,28,20);
+    ctx.fillStyle='#5e8f3a'; ctx.fillRect(x-10,y-24,20,13);
+    ctx.fillStyle='#c33'; ctx.fillRect(x-7,y-20,4,3); ctx.fillRect(x+3,y-20,4,3);
+    ctx.fillStyle='#2a4a1e'; ctx.fillRect(x-16,y-8,5,12); ctx.fillRect(x+11,y-8,5,12); // 粗臂
+  }else if(e.type==='boss'){
+    // 哥布林大王：大只+王冠
+    ctx.fillStyle='#355e24'; ctx.fillRect(x-18,y-14,36,26);
+    ctx.fillStyle='#4e8f2e'; ctx.fillRect(x-13,y-30,26,16);
+    ctx.fillStyle='#ffd54a'; ctx.fillRect(x-12,y-36,24,6);
+    ctx.fillRect(x-12,y-40,5,5); ctx.fillRect(x-3,y-41,5,6); ctx.fillRect(x+7,y-40,5,5);
+    ctx.fillStyle='#ff2e2e'; ctx.fillRect(x-9,y-25,6,4); ctx.fillRect(x+3,y-25,6,4);
+    ctx.fillStyle='#2a4a1e'; ctx.fillRect(x-22,y-10,7,16); ctx.fillRect(x+15,y-10,7,16);
+  }
+  // 血条
+  if(e.hp<e.hpMax){
+    const w=e.r*2;
+    ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(x-w/2,y-e.r-14,w,4);
+    ctx.fillStyle='#ff5b4a'; ctx.fillRect(x-w/2,y-e.r-14,w*Math.max(0,e.hp)/e.hpMax,4);
+  }
+  if(e.hurtT>0)ctx.restore();
+}
+
+function drawLight(ox,oy){
+  if(lightCv.width!==W||lightCv.height!==H){lightCv.width=W;lightCv.height=H;}
+  lctx.globalCompositeOperation='source-over';
+  // 黑暗程度
+  lctx.fillStyle='rgba(10,2,8,0.66)';
+  lctx.fillRect(0,0,W,H);
+  lctx.globalCompositeOperation='destination-out';
+  const cut=(x,y,r,a)=>{
+    const g=lctx.createRadialGradient(x,y,0,x,y,r);
+    g.addColorStop(0,'rgba(0,0,0,'+a+')');
+    g.addColorStop(0.6,'rgba(0,0,0,'+a*0.7+')');
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    lctx.fillStyle=g; lctx.beginPath(); lctx.arc(x,y,r,0,TAU); lctx.fill();
+  };
+  // 篝火大光圈（闪烁）
+  const fr=fireRadius()*Math.max(0.96,Math.sin(fire.flick*0.7)*0.02+1);
+  cut(CX+ox,CY+oy,fr*1.35,1);
+  cut(CX+ox,CY+oy,fr*2.2,0.32);
+  // 玩家随身小光圈
+  cut(player.x+ox,player.y+oy,178,0.95);
+  // 火球光
+  for(const f of fires)cut(f.x+ox,f.y+oy,60,0.7);
+  // 建好的塔发光
+  for(const s of TOWER_SPOTS)if(s.tower)cut(s.x+ox,s.y+oy,70,0.4);
+  ctx.drawImage(lightCv,0,0);
+  // 火圈描边（警示圈）
+  ctx.save(); ctx.translate(ox,oy);
+  ctx.strokeStyle='rgba(255,140,50,0.5)'; ctx.lineWidth=3;
+  ctx.setLineDash([14,10]); ctx.lineDashOffset=-G.time*30;
+  ctx.beginPath(); ctx.arc(CX,CY,fireRadius(),0,TAU); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawHUD(){
+  // 顶栏
+  ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(0,0,W,40);
+  ctx.textAlign='left'; ctx.font='bold 15px monospace';
+  ctx.fillStyle='#ffd54a'; ctx.fillText('第 '+G.wave+' 波',14,26);
+  ctx.fillStyle='#c89858'; ctx.fillText('木头 '+G.wood,110,26);
+  ctx.fillStyle='#4ae0d8'; ctx.fillText('Lv'+G.level+' ('+G.gems+'/'+G.gemNeed+')',215,26);
+  ctx.fillStyle='#ff8a7a'; ctx.fillText('击杀 '+G.kills,360,26);
+  ctx.textAlign='right';
+  ctx.fillStyle='#9a8a90'; ctx.font='12px monospace';
+  ctx.fillText('WASD移动 · 自动攻击 · 点四角建塔(30木) · P暂停',W-12,26);
+  // 波间倒计时
+  if(!G.inWave&&G.state==='play'){
+    ctx.textAlign='center'; ctx.fillStyle='#ffb347'; ctx.font='bold 16px monospace';
+    ctx.fillText('下一波 '+Math.ceil(G.waveTimer)+'s',W/2,60);
+  }
+}
+
+function drawTitle(){
+  ctx.fillStyle='rgba(15,5,10,0.72)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ff9a3a'; ctx.font='bold 52px monospace';
+  ctx.fillText('篝 火 大 作 战',W/2,H*0.3);
+  // 画个装饰篝火
+  ctx.save(); ctx.translate(W/2,H*0.42); ctx.scale(2,2);
+  drawCampfire(0,0); ctx.restore();
+  ctx.fillStyle='#d8c8c0'; ctx.font='15px monospace';
+  const lines=[
+    '黑夜森林里，哥布林怪潮一波波涌来……',
+    '🔥 砍树得木头，给篝火添柴维持火光 —— 火灭则败',
+    '🔥 哥布林怕火，火光圈内它们行动迟缓',
+    '🏕️ 花 30 木头在营地四角建哨塔，自动射箭',
+    '🪓 旋转斧头 + 🔥火球术自动战斗，捡宝石升级三选一',
+  ];
+  lines.forEach((l,i)=>ctx.fillText(l,W/2,H*0.56+i*26));
+  ctx.fillStyle='#ffd54a'; ctx.font='bold 22px monospace';
+  ctx.fillText('按 任意键 开始守夜',W/2,H*0.82);
+  if(G.state==='title'&&(keys._any||mouse.click||stick.active)){startGame();keys._any=false;}
+}
+window.addEventListener('keydown',()=>{keys._any=true;});
+
+function drawLevelUp(){
+  ctx.fillStyle='rgba(10,4,8,0.8)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#4ae0d8'; ctx.font='bold 30px monospace';
+  ctx.fillText('✦ 升级！选择一项 ✦',W/2,H*0.24);
+  const cw=Math.min(240,W/3-20), ch=170, gap=24;
+  const total=G.choice.length*cw+(G.choice.length-1)*gap;
+  G.choice.forEach((u,i)=>{
+    const x=W/2-total/2+i*(cw+gap), y=H*0.36;
+    // 鼠标悬停检测
+    const hov=mouse.x>=x&&mouse.x<=x+cw&&mouse.y>=y&&mouse.y<=y+ch;
+    ctx.fillStyle=hov?'rgba(255,180,70,0.25)':'rgba(255,255,255,0.08)';
+    ctx.fillRect(x,y,cw,ch);
+    ctx.strokeStyle=hov?'#ffb347':'rgba(255,255,255,0.25)'; ctx.lineWidth=2;
+    ctx.strokeRect(x,y,cw,ch);
+    ctx.fillStyle='#fff'; ctx.font='bold 19px monospace';
+    ctx.fillText(u.name,x+cw/2,y+52);
+    ctx.fillStyle='#b8a8a0'; ctx.font='13px monospace';
+    ctx.fillText(u.desc,x+cw/2,y+86);
+    ctx.fillStyle='#6a5a55'; ctx.font='12px monospace';
+    ctx.fillText('[ '+(i+1)+' ]',x+cw/2,y+135);
+    if(hov&&mouse.click){u.do();sfx('up');G.state='play';}
+  });
+  // 键盘选择
+  if(keys['1']&&G.choice[0]){G.choice[0].do();sfx('up');G.state='play';keys['1']=false;}
+  if(keys['2']&&G.choice[1]){G.choice[1].do();sfx('up');G.state='play';keys['2']=false;}
+  if(keys['3']&&G.choice[2]){G.choice[2].do();sfx('up');G.state='play';keys['3']=false;}
+}
+
+function drawOver(){
+  ctx.fillStyle='rgba(20,4,4,0.82)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ff5b4a'; ctx.font='bold 44px monospace';
+  ctx.fillText('游戏结束',W/2,H*0.32);
+  ctx.fillStyle='#ffb0a0'; ctx.font='18px monospace';
+  ctx.fillText(G.reason||'',W/2,H*0.42);
+  ctx.fillStyle='#e8d8d0'; ctx.font='bold 20px monospace';
+  ctx.fillText('坚守了 '+G.wave+' 波 · 击杀 '+G.kills+' · 等级 Lv'+G.level,W/2,H*0.53);
+  ctx.fillStyle='#ffd54a'; ctx.font='bold 20px monospace';
+  ctx.fillText('按 R 重新开始',W/2,H*0.68);
+  if(keys['r']){keys['r']=false;startGame();}
+}
+window.addEventListener('keydown',e=>{if(e.key.toLowerCase()==='r'&&G.state==='over')startGame();});
+
+// 塔位点击（在 play 状态下）
+cv.addEventListener('mousedown',()=>{
+  if(G.state!=='play')return;
+  for(const spot of TOWER_SPOTS){
+    const sx=spot.x-camX, sy=spot.y-camY;
+    if(Math.hypot(mouse.x-sx,mouse.y-sy)<40){buildOrUpgradeTower(spot);break;}
+  }
+});
+
+// ---------- 主循环 ----------
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  if(G.state==='play'&&!G.paused)update(dt);
+  else if(G.state==='title'||G.state==='over'){
+    // 界面背景仍轻微动
+    G.time+=dt; fire.flick+=dt*8;
+    for(const p of parts){p.t-=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;}
+    parts=parts.filter(p=>p.t>0);
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+// 标题界面背景先摆几棵树
+makeTrees(20);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

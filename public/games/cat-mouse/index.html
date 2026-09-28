@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>猫捉老鼠</title>
+<style>
+  :root{--bg:#f4ecd8;--panel:#fff7e6;--ink:#3a2f23;--line:#caa86a;--good:#3aa655;--bad:#c8482f;}
+  *{box-sizing:border-box;} html,body{margin:0;height:100%;}
+  body{background:var(--bg);color:var(--ink);font-family:"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;display:flex;flex-direction:column;align-items:center;padding:14px 10px 28px;-webkit-user-select:none;user-select:none;}
+  h1{font-size:22px;margin:2px 0 8px;letter-spacing:2px;}
+  .hud{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-bottom:8px;font-size:13px;}
+  .hud .chip{background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:5px 11px;box-shadow:0 2px 0 #00000018;}
+  .stage{background:linear-gradient(180deg,#c8b08a,#a89070);border:6px solid #3f2814;border-radius:18px;padding:10px;box-shadow:0 6px 0 #00000035,inset 0 0 0 2px #ffffff22;}
+  canvas{display:block;image-rendering:pixelated;border-radius:8px;background:#d6c0a0;cursor:pointer;}
+  .status{margin-top:9px;min-height:20px;font-size:14px;font-weight:600;text-align:center;color:var(--ink);}
+  .btns{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;justify-content:center;}
+  button{font:600 14px/1 "Segoe UI",system-ui,"Microsoft YaHei",sans-serif;color:var(--ink);background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:9px 16px;cursor:pointer;box-shadow:0 3px 0 #00000022;transition:transform .05s;}
+  button:active{transform:translateY(2px);box-shadow:0 1px 0 #00000022;} button.primary{background:#ffe2a8;border-color:#caa022;}
+  .hint{margin-top:12px;max-width:480px;font-size:12px;line-height:1.6;color:#6a5740;text-align:center;}
+  .overlay{position:fixed;inset:0;background:#00000066;display:none;align-items:center;justify-content:center;z-index:9;}
+  .overlay.show{display:flex;}
+  .card{background:var(--panel);border:3px solid var(--line);border-radius:16px;padding:22px 26px;text-align:center;max-width:300px;}
+  .card h2{margin:0 0 6px;font-size:22px;} .card p{margin:4px 0 16px;font-size:14px;color:#6a5740;}
+</style>
+</head>
+<body>
+  <h1>🐱 猫捉老鼠</h1>
+  <div class="hud">
+    <div class="chip">关卡 <b id="lv">1</b></div>
+    <div class="chip">步数 <b id="turn">0</b></div>
+    <div class="chip">最佳 <b id="best">1</b></div>
+  </div>
+  <div class="stage"><canvas id="game" width="460" height="460"></canvas></div>
+  <div class="status" id="status">你的回合：依次移动每只猫</div>
+  <div class="btns">
+    <button class="primary" id="retry">重玩本关</button>
+    <button id="endturn">结束回合</button>
+    <button id="prev">上一关</button>
+    <button id="next">下一关</button>
+  </div>
+  <div class="hint">
+    规则：在<b>三角木架</b>上，<b>你方所有猫每回合各走一步</b>（点猫选中→点绿点走），然后鼠走一步。
+    任意一只猫<b>踩到老鼠</b>或把老鼠<b>逼到没棍子可走</b>就赢；鼠先溜进<b>任意猫的起点船/窝</b>你就输。
+  </div>
+  <div class="overlay" id="overlay">
+    <div class="card"><h2 id="ovTitle">赢啦</h2><p id="ovText"></p><button class="primary" id="ovBtn">继续</button></div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+  const cv=document.getElementById("game"), ctx=cv.getContext("2d"), SIZE=460;
+
+  // ---------- 两个棋盘 ----------
+  function board1(){
+    const nodes={ A:{x:230,y:70},B:{x:70,y:360},C:{x:390,y:360}, D:{x:150,y:215},E:{x:230,y:263},F:{x:310,y:215} };
+    const adj={A:["D","F"],B:["D","C","E"],C:["F","B","E"],D:["A","B","E"],E:["B","C","D","F"],F:["A","C","E"]};
+    return {nodes,adj,starts:["E"],mouseStart:"A",boats:["B","C"]};
+  }
+  function board2(){
+    const nodes={
+      A:{x:230,y:50},
+      B0:{x:150,y:140},B1:{x:230,y:140},B2:{x:310,y:140},
+      C0:{x:150,y:260},C1:{x:230,y:260},C2:{x:310,y:260},
+      D0:{x:150,y:380},D1:{x:230,y:380},D2:{x:310,y:380}
+    };
+    const adj={
+      A:["B0","B1","B2"],
+      B0:["A","B1","C0","C1"], B1:["A","B0","B2","C0","C1","C2"], B2:["A","B1","C1","C2"],
+      C0:["B0","B1","C1","D0","D1"], C1:["B0","B1","B2","C0","C2","D0","D1","D2"], C2:["B1","B2","C1","D1","D2"],
+      D0:["C0","C1","D1"], D1:["C0","C1","C2","D0","D2"], D2:["C1","C2","D1"]
+    };
+    return {nodes,adj,starts:["D0","D1","D2"],mouseStart:"A",boats:["D0","D1","D2"]};
+  }
+
+  function boardBig(){
+    const nodes={
+      A:{x:230,y:45},
+      B0:{x:160,y:120},B1:{x:230,y:120},B2:{x:300,y:120},
+      C0:{x:110,y:205},C1:{x:180,y:205},C2:{x:250,y:205},C3:{x:320,y:205},C4:{x:390,y:205},
+      D0:{x:60,y:300},D1:{x:125,y:300},D2:{x:190,y:300},D3:{x:255,y:300},D4:{x:320,y:300},D5:{x:385,y:300},D6:{x:450,y:300}
+    };
+    const adj={
+      A:["B0","B1","B2"],
+      B0:["A","B1","C0","C1"], B1:["A","B0","B2","C1","C2"], B2:["A","B1","C2","C3"],
+      C0:["B0","C1","D0","D1"], C1:["B0","B1","C0","C2","D1","D2"],
+      C2:["B1","B2","C1","C3","D2","D3"], C3:["B2","C2","C4","D3","D4"], C4:["B2","C3","D4","D5"],
+      D0:["C0","D1","D6"], D1:["C0","C1","D0","D2"], D2:["C1","C2","D1","D3"],
+      D3:["C2","C3","D2","D4"], D4:["C3","C4","D3","D5"], D5:["C4","D4","D6"], D6:["C4","D5","D0"]
+    };
+    return {nodes,adj,starts:["D2","D3","D4"],mouseStart:"A",boats:["D2","D3","D4"]};
+  }
+
+  const LEVELS=[
+    {name:"1", smart:0.40, board:board1},
+    {name:"2", smart:0.65, board:board2},
+    {name:"3", smart:0.85, board:boardBig}
+  ];
+
+  let G, levelIdx=0, cats=[], starts=[], selected=0, mouse="", turnCount=0, busy=false, over=false;
+  let moved=new Set(), phase="player";
+  let best=parseInt(localStorage.getItem("mzls_best")||"1",10);
+
+  const nodeById=id=>G.nodes[id];
+  function occupiedByAnyCat(id){ return cats.includes(id); }
+  function legalCatMovesFor(i){
+    const out=[];
+    for(const id of G.adj[cats[i]]){
+      let occ=false;
+      for(let j=0;j<cats.length;j++) if(j!==i && cats[j]===id){ occ=true; break; }
+      if(occ) continue;            // 不能踩别的猫，但可以踩老鼠（抓）
+      out.push(id);
+    }
+    return out;
+  }
+  function legalCatMoves(){ return legalCatMovesFor(selected); }
+  function legalMouseMoves(){ return G.adj[mouse].filter(id=>!occupiedByAnyCat(id)); }
+
+  function bfsDist(){
+    const dist={}; for(const id in G.nodes) dist[id]=Infinity;
+    const q=[]; for(const s of starts){ dist[s]=0; q.push(s); }
+    let qi=0;
+    while(qi<q.length){
+      const c=q[qi++];
+      for(const nid of G.adj[c]){
+        if(dist[nid]===Infinity && !occupiedByAnyCat(nid)){ dist[nid]=dist[c]+1; q.push(nid); }
+      }
+    }
+    return dist;
+  }
+  function freeN(id){ return G.adj[id].filter(x=>!occupiedByAnyCat(x)).length; }
+  function nearestCatDist(id){
+    let mn=Infinity;
+    for(const c of cats){ const n=nodeById(c), p=nodeById(id); mn=Math.min(mn, Math.hypot(n.x-p.x, n.y-p.y)); }
+    return mn;
+  }
+  function chooseMouse(){
+    const moves=legalMouseMoves();
+    if(moves.length===0) return null;
+    const smart=LEVELS[levelIdx].smart;
+    if(Math.random()>smart) return moves[Math.floor(Math.random()*moves.length)];
+    const dist=bfsDist();
+    const ranked=moves.map(id=>({id, key:[dist[id], -freeN(id), -Math.round(nearestCatDist(id))]}))
+      .sort((a,b)=>{ for(let i=0;i<a.key.length;i++) if(a.key[i]!==b.key[i]) return a.key[i]-b.key[i]; return 0; });
+    return ranked[Math.floor(Math.random()*Math.min(2,ranked.length))].id;
+  }
+
+  function firstUnmoved(){
+    for(let i=0;i<cats.length;i++) if(!moved.has(i) && legalCatMovesFor(i).length>0) return i;
+    return -1;
+  }
+  function allCatsDone(){
+    for(let i=0;i<cats.length;i++){
+      if(moved.has(i)) continue;
+      if(legalCatMovesFor(i).length>0) return false;   // 还有没动且能动的猫
+    }
+    return true;
+  }
+  function remainMovable(){
+    let n=0; for(let i=0;i<cats.length;i++) if(!moved.has(i) && legalCatMovesFor(i).length>0) n++;
+    return n;
+  }
+  function playerPrompt(){
+    const r=remainMovable();
+    if(cats.length===1) return "你的回合：点猫选中，再点绿点移动";
+    return r>0 ? `你的回合：还有 ${r} 只猫要动（点猫选中→点绿点走）` : "猫都动了，鼠该走了…";
+  }
+
+  function loadLevel(i){
+    levelIdx=(i+LEVELS.length)%LEVELS.length;
+    const L=LEVELS[levelIdx];
+    G=L.board(); starts=G.starts.slice(); cats=starts.slice(); mouse=G.mouseStart;
+    turnCount=0; busy=false; over=false; moved=new Set(); phase="player";
+    selected=firstUnmoved(); if(selected===-1) selected=0;
+    document.getElementById("lv").textContent=levelIdx+1;
+    document.getElementById("best").textContent=best;
+    setStatus(playerPrompt(),null);
+    render();
+  }
+  function setStatus(t,win){
+    const el=document.getElementById("status");
+    el.textContent=t; el.style.color=win===true?"var(--good)":win===false?"var(--bad)":"var(--ink)";
+  }
+
+  function playerMove(id){
+    if(busy||over||phase!=="player") return;
+    const ci=cats.indexOf(id);
+    if(ci!==-1){                       // 点到了一只猫
+      if(moved.has(ci)) return;        // 本回合已动过
+      selected=ci; render(); return;
+    }
+    if(!legalCatMoves().includes(id)) return;
+    cats[selected]=id; moved.add(selected); turnCount++;
+    document.getElementById("turn").textContent=turnCount;
+    render();
+    if(id===mouse) return finish(true,"猫一把按住老鼠，赢！");
+    if(allCatsDone()){ mousePhase(); return; }
+    selected=firstUnmoved();
+    if(selected===-1){ mousePhase(); return; }
+    render(); setStatus(playerPrompt(),null);
+  }
+
+  function mousePhase(){
+    phase="mouse"; busy=true; setStatus("老鼠正在溜……",null);
+    if(legalMouseMoves().length===0) return finish(true,"老鼠被逼到没路走，赢！");
+    setTimeout(()=>{
+      const mv=chooseMouse();
+      if(mv) mouse=mv;
+      render();
+      if(starts.includes(mouse)) return finish(false,"老鼠溜进了你的窝，你输了！");
+      if(legalMouseMoves().length===0) return finish(true,"老鼠被困住了，赢！");
+      phase="player"; busy=false; moved=new Set();
+      selected=firstUnmoved(); if(selected===-1) selected=0;
+      render(); setStatus(playerPrompt(),null);
+    },300);
+  }
+
+  function finish(win,msg){
+    over=true; busy=false;
+    if(win && levelIdx+2>best){ best=Math.max(best,levelIdx+2); localStorage.setItem("mzls_best",String(best)); document.getElementById("best").textContent=best; }
+    document.getElementById("ovTitle").textContent=win?"赢啦 🎉":"输了 😿";
+    document.getElementById("ovText").textContent=msg;
+    document.getElementById("ovBtn").textContent=(win && levelIdx+1<LEVELS.length)?"下一关":"重玩本关";
+    document.getElementById("overlay").classList.add("show");
+    setStatus(msg,win); beep(win?660:200,win?0.12:0.22);
+  }
+
+  // ---------- 渲染 ----------
+  const BEAM="#a07040", BEAM2="#6b4320";
+  function render(){
+    ctx.clearRect(0,0,SIZE,SIZE);
+    ctx.fillStyle="#d6c0a0"; ctx.fillRect(0,0,SIZE,SIZE);
+    const seen=new Set();
+    for(const id in G.nodes){
+      for(const nid of G.adj[id]){
+        const k=[id,nid].sort().join("|");
+        if(seen.has(k)) continue; seen.add(k);
+        const a=nodeById(id), b=nodeById(nid);
+        ctx.strokeStyle=BEAM; ctx.lineWidth=12; ctx.lineCap="round";
+        ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+        ctx.strokeStyle=BEAM2; ctx.lineWidth=4;
+        ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+      }
+    }
+    for(const id of G.boats) drawBoat(nodeById(id));
+    for(const id in G.nodes){ const n=G.nodes[id]; ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(n.x,n.y,12,0,7); ctx.fill(); ctx.strokeStyle="#6b4320"; ctx.lineWidth=2; ctx.stroke(); }
+    for(const s of starts) drawDen(nodeById(s));
+    // 猫高亮
+    for(let i=0;i<cats.length;i++){
+      if(phase==="player" && !moved.has(i)){
+        const c=nodeById(cats[i]);
+        ctx.strokeStyle=(i===selected)?"#ffffff":"rgba(255,255,255,0.55)"; ctx.lineWidth=3; ctx.setLineDash([5,3]);
+        ctx.beginPath(); ctx.arc(c.x,c.y,18,0,7); ctx.stroke(); ctx.setLineDash([]);
+      } else if(moved.has(i)){
+        const c=nodeById(cats[i]); ctx.fillStyle="rgba(58,166,85,0.9)"; ctx.beginPath(); ctx.arc(c.x,c.y-30,3,0,7); ctx.fill();
+      }
+    }
+    if(phase==="player" && !moved.has(selected)){
+      ctx.strokeStyle="rgba(58,166,85,0.95)"; ctx.lineWidth=3;
+      for(const id of legalCatMoves()){
+        const n=nodeById(id);
+        ctx.beginPath(); ctx.arc(n.x,n.y,18,0,7); ctx.stroke();
+        ctx.fillStyle="rgba(58,166,85,0.25)"; ctx.beginPath(); ctx.arc(n.x,n.y,14,0,7); ctx.fill();
+      }
+    }
+    for(let i=0;i<cats.length;i++) drawPiece("cat", nodeById(cats[i]));
+    drawPiece("mouse", nodeById(mouse));
+  }
+  function drawBoat(n){
+    const x=n.x, y=n.y+14;
+    ctx.fillStyle="#b05040"; ctx.beginPath();
+    ctx.moveTo(x-26,y); ctx.lineTo(x+26,y); ctx.lineTo(x+18,y+14); ctx.lineTo(x-18,y+14); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle="#5e2a20"; ctx.lineWidth=2; ctx.stroke();
+    ctx.strokeStyle="#4a8ec0"; ctx.lineWidth=2; ctx.beginPath();
+    for(let i=-2;i<=2;i++){ ctx.moveTo(x+i*10,y+16); ctx.lineTo(x+i*10+4,y+16); } ctx.stroke();
+  }
+  function drawDen(n){
+    const x=n.x, y=n.y;
+    ctx.fillStyle="#b8965a"; ctx.beginPath(); ctx.arc(x,y,14,0,7); ctx.fill();
+    ctx.fillStyle="#9c7c40";
+    for(let i=0;i<6;i++){ const a=i/6*Math.PI*2; ctx.beginPath(); ctx.arc(x+Math.cos(a)*7,y+Math.sin(a)*7,3,0,7); ctx.fill(); }
+    ctx.strokeStyle="#7a4a22"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,y-14); ctx.lineTo(x,y+4); ctx.stroke();
+    ctx.fillStyle="#ffcf4d"; ctx.beginPath();
+    ctx.moveTo(x,y-14); ctx.lineTo(x+10,y-10); ctx.lineTo(x,y-6); ctx.closePath(); ctx.fill();
+  }
+  function drawPiece(type,n){
+    const x=n.x,y=n.y,s=34,u=s/12,half=6*u;
+    const blk=(cx,cy,w,h,col)=>{ ctx.fillStyle=col; ctx.fillRect(x-half+cx*u,y-half+cy*u,w*u,h*u); };
+    if(type==="cat"){
+      blk(2,0,2,2,"#c8761b"); blk(8,0,2,2,"#c8761b");
+      blk(2,1,1,1,"#ffb6c8"); blk(8,1,1,1,"#ffb6c8");
+      blk(2,2,8,7,"#f4a23b");
+      blk(4,4,1,2,"#2a2a2a"); blk(7,4,1,2,"#2a2a2a");
+      blk(4,6,4,2,"#fff4e0"); blk(5,6,2,1,"#ff8fae");
+      blk(1,6,1,1,"#fff4e0"); blk(10,6,1,1,"#fff4e0");
+    }else{
+      blk(3,0,2,2,"#b8b8c0"); blk(7,0,2,2,"#b8b8c0");
+      blk(3,1,1,1,"#ff8fae"); blk(7,1,1,1,"#ff8fae");
+      blk(3,2,6,6,"#cfcfd6");
+      blk(4,4,1,1,"#2a2a2a"); blk(7,4,1,1,"#2a2a2a");
+      blk(5,5,2,1,"#ff8fae");
+      blk(9,7,2,1,"#b8b8c0"); blk(11,6,1,2,"#b8b8c0");
+    }
+  }
+
+  // ---------- 音效 ----------
+  let actx=null;
+  function beep(freq,dur){
+    try{
+      actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+      const o=actx.createOscillator(), g=actx.createGain();
+      o.type="square"; o.frequency.value=freq;
+      g.gain.value=0.04; o.connect(g); g.connect(actx.destination);
+      o.start(); g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime+dur);
+      o.stop(actx.currentTime+dur);
+    }catch(e){}
+  }
+
+  // ---------- 交互 ----------
+  cv.addEventListener("click",(e)=>{
+    const r=cv.getBoundingClientRect();
+    const sx=(e.clientX-r.left)*(SIZE/r.width);
+    const sy=(e.clientY-r.top)*(SIZE/r.height);
+    let best=null, bd=1e9;
+    for(const id in G.nodes){ const n=nodeById(id); const d=Math.hypot(n.x-sx,n.y-sy); if(d<bd){ bd=d; best=id; } }
+    if(best && bd<26) playerMove(best);
+  });
+  document.getElementById("retry").onclick=()=>{ document.getElementById("overlay").classList.remove("show"); loadLevel(levelIdx); };
+  document.getElementById("endturn").onclick=()=>{
+    if(busy||over||phase!=="player") return;
+    for(let i=0;i<cats.length;i++) if(!moved.has(i)) moved.add(i);  // 未动的猫本回合跳过
+    mousePhase();
+  };
+  document.getElementById("prev").onclick=()=>{ document.getElementById("overlay").classList.remove("show"); loadLevel(levelIdx-1); };
+  document.getElementById("next").onclick=()=>{ document.getElementById("overlay").classList.remove("show"); loadLevel(levelIdx+1); };
+  document.getElementById("ovBtn").onclick=()=>{
+    const win=document.getElementById("ovTitle").textContent.includes("赢");
+    document.getElementById("overlay").classList.remove("show");
+    if(win && levelIdx+1<LEVELS.length) loadLevel(levelIdx+1); else loadLevel(levelIdx);
+  };
+
+  loadLevel(0);
+})();
+</script>
+</body>
+</html>
