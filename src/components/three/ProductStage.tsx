@@ -20,6 +20,9 @@ type PartItem = {
   group: ExplodeGroupResolved | null;
   parentQuatInv: THREE.Quaternion;
   parentScale: number;
+  /** 工程里写好的爆炸位移（three 坐标、米）与错峰延迟 */
+  ex?: [number, number, number];
+  delay: number;
 };
 
 type Prepared = {
@@ -57,6 +60,7 @@ function Scene({
   /* 只 clone 一次：动画作用的对象与渲染的对象必须是同一份 */
   const prepared = useMemo<Prepared>(() => {
     const { resolved, groupOf } = resolveGroups(manifest.parts, timeline.groups);
+    const byName = new Map(manifest.parts.map((x) => [x.name, x]));
     const scene = gltf.scene.clone(true);
     const items: PartItem[] = [];
     scene.traverse((o) => {
@@ -77,6 +81,7 @@ function Scene({
       parent.getWorldQuaternion(pq);
       const ps = new THREE.Vector3();
       parent.getWorldScale(ps);
+      const rec = byName.get(mesh.name);
       items.push({
         mesh,
         base: mesh.position.clone(),
@@ -84,6 +89,8 @@ function Scene({
         group: g,
         parentQuatInv: pq.invert(),
         parentScale: ps.x || 1,
+        ex: rec?.ex,
+        delay: rec?.delay ?? 0,
       });
     });
     return { scene, items, groups: resolved };
@@ -156,18 +163,36 @@ function Scene({
        这样模型整体旋转时展开方向会同步旋转，镜头始终沿镜轴推出，而不是飞向屏幕外的固定方向。 */
     const rootQuatInv = rootRef.current.getWorldQuaternion(tmp.q2).invert();
     const env = 1 - window01(p, timeline.returnWindow[0], timeline.returnWindow[1]);
+    const exWin = timeline.exWindow;
+    const authored = exWin ?? [0.3, 0.62];
     for (const it of prepared.items) {
       const g = it.group;
-      if (!g || g.fixed || g.dist === 0) { it.mesh.position.copy(it.base); continue; }
-      const amt = smoothstep(window01(p, g.t0, g.t1)) * env;
-      tmp.off
-        .set(g.direction[0], g.direction[1], g.direction[2])
-        .applyQuaternion(rootQuatInv)
-        .applyQuaternion(it.parentQuatInv)
-        .multiplyScalar((g.dist * amt * timeline.explodeScale) / it.parentScale);
+      const ex = it.ex;
+      const hasEx = !!ex && (ex[0] !== 0 || ex[1] !== 0 || ex[2] !== 0);
+      /* 展开量：自带编排走上分支，分组兜底走下分支 */
+      let amount = 0;
+
+      if (hasEx) {
+        /* 工程自带的编排：位移量 ex 与错峰延迟 delay 都是作者逐件写好的，
+           这里严格照搬渲染脚本的时序 t = smoothstep((ep - delay*0.34) / 0.66)。 */
+        const ep = window01(p, authored[0], authored[1]);
+        const t = smoothstep((ep - it.delay * 0.34) / 0.66) * env;
+        amount = t;
+        tmp.off.set(ex![0], ex![1], ex![2]).multiplyScalar(t * timeline.explodeScale);
+      } else if (g && !g.fixed && g.dist > 0) {
+        /* 兜底：模型没有自带编排时，按分组方向展开 */
+        const amt = smoothstep(window01(p, g.t0, g.t1)) * env;
+        amount = amt;
+        tmp.off.set(g.direction[0], g.direction[1], g.direction[2]).multiplyScalar(g.dist * amt * timeline.explodeScale);
+      } else {
+        it.mesh.position.copy(it.base);
+        continue;
+      }
+
+      tmp.off.applyQuaternion(rootQuatInv).applyQuaternion(it.parentQuatInv).multiplyScalar(1 / it.parentScale);
       it.mesh.position.copy(it.base).add(tmp.off);
-      if (g.spin) {
-        tmp.q.setFromEuler(tmp.e.set(g.spin[0] * amt, g.spin[1] * amt, g.spin[2] * amt));
+      if (g?.spin) {
+        tmp.q.setFromEuler(tmp.e.set(g.spin[0] * amount, g.spin[1] * amount, g.spin[2] * amount));
         it.mesh.quaternion.copy(it.baseQuat).multiply(tmp.q);
       }
     }

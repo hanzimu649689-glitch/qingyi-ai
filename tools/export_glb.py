@@ -106,6 +106,10 @@ def manifest(path):
             w = o.matrix_world @ Vector(c)
             for i in range(3):
                 lo[i] = min(lo[i], w[i]); hi[i] = max(hi[i], w[i])
+        # 工程里写好的爆炸向量（Blender 坐标、建模单位）→ three 坐标、米
+        # Blender (x, y, z) → three (x, z, -y)；相机建模单位 1 = 100mm，故乘 0.1
+        ex = list(o.get("ex_v", (0.0, 0.0, 0.0)))
+        ex_three = [round(ex[0] * 0.1, 6), round(ex[2] * 0.1, 6), round(-ex[1] * 0.1, 6)]
         parts.append({
             "name": o.name,
             "group": o.parent.name if o.parent else None,
@@ -114,6 +118,8 @@ def manifest(path):
             "center": [round(v, 5) for v in ((lo + hi) / 2)],
             "size": [round(v, 5) for v in (hi - lo)],
             "origin": [round(v, 5) for v in o.matrix_world.translation],
+            "ex": ex_three,
+            "delay": round(float(o.get("ex_delay", 0.0)), 4),
         })
     parts.sort(key=lambda p: -p["tris"])
     data = {"parts": parts, "count": len(parts), "tris": sum(p["tris"] for p in parts)}
@@ -138,29 +144,18 @@ def export(glb):
     return os.path.getsize(glb)
 
 def build_camera():
-    src = r"G:\数字孪生\BlenderMCP_相机建模\相机模型_双轨.blend"
+    """相机：使用 相机模型_v3.blend —— 即「演示片_镜头按键爆炸与360展示」所用的那套模型。
+    v3 是精细零件版：300 件全部可见、每件都带作者写好的 ex_v 爆炸向量与 base_loc 基准位置，
+    且面数仅 4.9 万（远低于双轨 AI 高模的 43 万），因此无需减面，也就不会破坏 UV 与烘焙贴图。"""
+    src = r"G:\数字孪生\BlenderMCP_相机建模\相机模型_v3.blend"
     work = os.path.join(TMP, "camera_work.blend")
     shutil.copy2(src, work)
     bpy.ops.wm.open_mainfile(filepath=work)
     print("### 相机 · 源:", os.path.basename(src))
     print("  删除影棚/灯光/渲染相机:", delete_studio())
-    dead = bpy.data.objects.get("相机_顶部_已停用")
-    if dead:
-        names = []
-        for o in list(descend(dead)):
-            names.append(o.name); bpy.data.objects.remove(o, do_unlink=True)
-        print(f"  删除 相机_顶部_已停用 共 {len(names)} 个对象")
-    for gname in ("相机_前窗", "相机_隐藏件"):
-        g = bpy.data.objects.get(gname)
-        if g:
-            mem = list(descend(g)); unhide(mem)
-            print(f"  启用 {gname} {len(mem)} 个对象")
-    for nm, ratio in (("机身", 0.22), ("机身内衬", 0.06), ("顶盖", 0.30)):
-        o = bpy.data.objects.get(nm)
-        if o:
-            b, a = decimate(o, ratio)
-            print(f"  减面 {nm}: {b} -> {a} 面 (ratio={ratio})")
     print("  重命名:", fix_names(), "个对象")
+    n_ex = sum(1 for o in bpy.data.objects if o.type == "MESH" and "ex_v" in o.keys())
+    print("  带 ex_v 爆炸向量的对象:", n_ex)
     for (n, o, nw) in shrink_images(1024): print(f"  贴图 {n}: {o} -> {nw}")
     roots = [o for o in bpy.data.objects if o.parent is None]
     lo, hi = world_bbox(bpy.data.objects)

@@ -24,4 +24,6 @@ export type ProductTimeline = {
   envIntensity: number;
   /** 全局展开幅度系数：一处收敛所有分件位移，避免逐个改魔法数字 */
   explodeScale: number;
+  /** 展开窗口（全局滚动进度）。若工程内自带 ex_v/ex_delay，则用这个窗口做基准。 */
+  exWindow?: [number, number];
 };

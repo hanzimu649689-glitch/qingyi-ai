@@ -8,6 +8,10 @@ export type PartRecord = {
   center: [number, number, number];
   size: [number, number, number];
   origin: [number, number, number];
+  /** 工程里写好的爆炸位移（three 坐标、米）。0 表示该件是基准件不动。 */
+  ex?: [number, number, number];
+  /** 工程里写好的错峰延迟 0–1 */
+  delay?: number;
 };
 
 export type PartsManifest = { parts: PartRecord[]; count: number; tris: number };

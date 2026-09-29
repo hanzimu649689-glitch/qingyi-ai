@@ -3,7 +3,7 @@
  * 两个模型的分件材质都是中文语义化命名（钢_抛光、黄铜_做旧、镜片_镀膜…），
  * 所以按名字规则还原质感，比依赖贴图更轻也更稳定。
  */
-import type * as THREE from "three";
+import * as THREE from "three";
 
 type Pbr = {
   color?: number;
@@ -53,6 +53,59 @@ const RULES: { test: RegExp; pbr: Pbr }[] = [
 
 const DEFAULT: Pbr = { metalness: 0.6, roughness: 0.42, envMapIntensity: 1.0 };
 
+/* ---------------- 程序化表面颗粒 ----------------
+ * Blender 里的做旧质感（黄铜氧化、皮革荔枝纹、漆面老化）是靠 ColorRamp + 噪声节点做的，
+ * glTF 无法携带这类节点，导出后只剩基础色。这里用一张代码生成的噪声贴图作为粗糙度贴图，
+ * 把「表面颗粒」补回来——高光会被打散，黑件上就能看出皮革与金属的区别。
+ */
+let grainCache: THREE.Texture | null = null;
+
+function grainTexture(): THREE.Texture | null {
+  if (grainCache) return grainCache;
+  if (typeof document === "undefined") return null;
+  const SZ = 256;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = SZ;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+
+  const hash = (x: number, y: number) => {
+    const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return n - Math.floor(n);
+  };
+  const smooth = (t: number) => t * t * (3 - 2 * t);
+  const noise = (x: number, y: number) => {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = smooth(x - xi), yf = smooth(y - yi);
+    const a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
+    return a * (1 - xf) * (1 - yf) + b * xf * (1 - yf) + c * (1 - xf) * yf + d * xf * yf;
+  };
+
+  const img = ctx.createImageData(SZ, SZ);
+  for (let y = 0; y < SZ; y++) {
+    for (let x = 0; x < SZ; x++) {
+      let v = 0, amp = 0.5, f = 10 / SZ;
+      for (let o = 0; o < 4; o++) { v += noise(x * f, y * f) * amp; amp *= 0.5; f *= 2; }
+      const g = Math.max(0, Math.min(255, Math.round(138 + 115 * (v - 0.5) * 2)));
+      const i = (y * SZ + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = g;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2.5, 2.5);
+  tex.anisotropy = 4;
+  grainCache = tex;
+  return tex;
+}
+
+/** 哪些材质需要表面颗粒（按中文语义名判定） */
+const GRAIN = /皮革|黄铜|哑黑|漆面|机芯_主板|机芯_夹板|内部|快门帘/;
+/* 颗粒需要乘在粗糙度上，所以基值要相应提高，否则会越磨越亮 */
+const GRAIN_ROUGHNESS_BOOST = 1.45;
+
 export function pbrFor(materialName: string, baseColor: THREE.Color | null): Pbr {
   const hit = RULES.find((r) => r.test.test(materialName));
   const pbr = hit ? hit.pbr : DEFAULT;
@@ -81,5 +134,16 @@ export function applyPbr(
   mat.depthWrite = !p.transparent;
   /* 玻璃类为了性能关掉真实透射，改用高环境反射 + 低不透明度近似 */
   mat.side = 0;
+
+  /* 表面颗粒：让黑色件与黄铜件在环境下有真实的质感差异 */
+  if (GRAIN.test(name)) {
+    const g = grainTexture();
+    if (g) {
+      mat.roughnessMap = g;
+      mat.roughness = Math.min(1, mat.roughness * GRAIN_ROUGHNESS_BOOST);
+    }
+  } else {
+    mat.roughnessMap = null;
+  }
   mat.needsUpdate = true;
 }

@@ -13,14 +13,17 @@ export const cameraTimeline: ProductTimeline = {
   orientation: [0, 0, 0],
   returnWindow: [0.86, 0.975],
   envIntensity: 1.6,
-  explodeScale: 0.58,
+  /* 位移量直接取自工程里作者写好的 ex_v（单位已换算为米），因此系数保持 1 */
+  explodeScale: 0.52,
+  /* 展开窗口：与章节对齐，随后在 returnWindow 内统一归位 */
+  exWindow: [0.29, 0.63],
   keyframes: [
     // 01 整机
     { cam: [0.0, 0.055, 0.40], target: [0, 0.042, 0.0], rot: [0, -0.18, 0], scale: 1, fov: 30 },
     // 02 结构总览：转到四分之三侧
     { cam: [0.29, 0.10, 0.30], target: [0, 0.040, 0.0], rot: [0, -0.62, 0], scale: 1, fov: 30 },
     // 03 爆炸拆解：拉远以容纳展开后的体积
-    { cam: [0.40, 0.24, 0.74], target: [0, 0.044, 0.0], rot: [0, -0.85, 0], scale: 1, fov: 36 },
+    { cam: [0.34, 0.22, 0.60], target: [0, 0.045, 0.012], rot: [0, -0.85, 0], scale: 1, fov: 34 },
     // 04 结构注解：贴近镜头组
     { cam: [0.11, 0.08, 0.24], target: [0, 0.042, 0.03], rot: [0, -0.35, 0], scale: 1, fov: 28 },
     // 05 材质工艺：掠射角度看外壳与皮革
