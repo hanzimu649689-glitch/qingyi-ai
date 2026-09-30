@@ -1,5 +1,7 @@
 # 清邑 AI · 公司官网
 
+**线上地址：https://hanzimu649689-glitch.github.io/qingyi-ai/**
+
 科技感 / 未来感的公司官网，含三大业务：产品数字孪生、定制智能体、少儿 AI 培训。
 
 ## 技术栈
@@ -19,8 +21,11 @@ npm run preview   # 本地预览
 
 ## 部署到 GitHub Pages
 
-推送到 `main` 后，`.github/workflows/deploy.yml` 自动构建并部署。
-首次需在仓库 Settings → Pages → Source 选择 **GitHub Actions**。
+推送到 `main` 后，`.github/workflows/deploy.yml` 自动构建并部署（本仓库已配置完成并验证）。
+
+- 站点：https://hanzimu649689-glitch.github.io/qingyi-ai/
+- 子路径 base 由 workflow 自动推导，无需手改
+- 深链接（如 `/digital-twin/camera`）由 `dist/404.html` 承载，刷新不会 404
 
 子路径（base）自动推导：仓库名为 `<user>.github.io` 用 `/`，否则用 `/<仓库名>/`。
 
